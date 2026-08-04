@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  每天 09:00 和 21:00：@kochiasmr Shorts -> 小红书 + 快手（每次 1 条，一天 2 条）
+
+  安装:
+    cp scripts/com.sau.yt-xhs-daily.plist ~/Library/LaunchAgents/
+    launchctl bootout gui/$(id -u)/com.sau.yt-xhs-daily 2>/dev/null
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sau.yt-xhs-daily.plist
+
+  立刻试跑:
+    launchctl start com.sau.yt-xhs-daily
+
+  卸载:
+    launchctl bootout gui/$(id -u)/com.sau.yt-xhs-daily
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.sau.yt-xhs-daily</string>
+
+  <key>WorkingDirectory</key>
+  <string>/Applications/social-auto-upload</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Applications/social-auto-upload/.venv/bin/python</string>
+    <string>/Applications/social-auto-upload/scripts/sync_yt_xhs.py</string>
+    <string>--channel</string>
+    <string>https://www.youtube.com/@kochiasmr/shorts</string>
+    <string>--account</string>
+    <string>boss rabbit</string>
+    <string>--daily-limit</string>
+    <string>1</string>
+    <string>--cookies-from-browser</string>
+    <string>edge</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict>
+      <key>Hour</key>
+      <integer>9</integer>
+      <key>Minute</key>
+      <integer>0</integer>
+    </dict>
+    <dict>
+      <key>Hour</key>
+      <integer>21</integer>
+      <key>Minute</key>
+      <integer>0</integer>
+    </dict>
+  </array>
+
+  <key>StandardOutPath</key>
+  <string>/Applications/social-auto-upload/logs/yt_xhs_daily.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Applications/social-auto-upload/logs/yt_xhs_daily.err.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Applications/social-auto-upload/.venv/bin:/Users/shaomaojia/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>

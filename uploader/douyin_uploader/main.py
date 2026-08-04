@@ -4,6 +4,7 @@ from datetime import datetime
 import asyncio
 import inspect
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -49,18 +50,51 @@ def _build_login_result(success: bool, status: str, message: str, account_file: 
     }
 
 
+def _prompt_verify_code_macos() -> str:
+    """Show a blocking macOS dialog so LaunchAgent / non-TTY runs can enter SMS codes."""
+    script = """
+    try
+        display notification "抖音发布需要短信验证码，请在弹窗中输入" with title "social-auto-upload"
+    end try
+    try
+        tell application "System Events" to activate
+        set dlg to display dialog "抖音发布需要短信验证码，请查看手机（或已转发到 Mac 的信息），然后输入验证码：" default answer "" with title "抖音验证码" buttons {"取消", "确认"} default button "确认" giving up after 300
+        if gave up of dlg then return ""
+        if button returned of dlg is "取消" then return ""
+        return text returned of dlg
+    on error
+        return ""
+    end try
+    """
+    try:
+        proc = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=320,
+        )
+        if proc.returncode == 0:
+            return (proc.stdout or "").strip()
+    except (subprocess.TimeoutExpired, OSError):
+        return ""
+    return ""
+
+
 async def _read_verify_code(code_file: str) -> str:
     if os.path.exists(code_file):
         with open(code_file, encoding="utf-8") as file_obj:
             return file_obj.read().strip()
 
-    if not sys.stdin or not sys.stdin.isatty():
-        return ""
+    if sys.stdin and sys.stdin.isatty():
+        try:
+            return (await asyncio.to_thread(input, "请输入抖音短信验证码（直接回车可稍后重试）: ")).strip()
+        except (EOFError, OSError):
+            pass
 
-    try:
-        return (await asyncio.to_thread(input, "请输入抖音短信验证码（直接回车可稍后重试）: ")).strip()
-    except (EOFError, OSError):
-        return ""
+    # Scheduled LaunchAgent has no TTY; fall back to macOS system dialog.
+    if sys.platform == "darwin":
+        return await asyncio.to_thread(_prompt_verify_code_macos)
+    return ""
 
 
 async def cookie_auth(account_file):
@@ -320,21 +354,38 @@ class DouYinBaseUploader(BaseVideoUploader):
         await asyncio.sleep(1)
 
     async def fill_title_and_description(self, page: Page, title: str, description: str, tags: list[str] | None = None):
-        # 2026-06 抖音发布页 DOM：标题=input[placeholder*=填写作品标题]，描述=div.zone-container[contenteditable]
+        # 兼容两套发布页 DOM：
+        # - 旧：标题 placeholder*=填写作品标题，描述=div.zone-container[contenteditable]，话题写进描述
+        # - 新(2026-08 图文)：标题=添加作品标题(20字)，描述=添加作品描述，话题=#添加话题 独立输入框
         # version_2(post/video) 发布页要等视频上传完才渲染表单（实测约 40s），故等待超时给到 120s
-        title_input = page.locator('input[placeholder*="填写作品标题"]').first
+        title_input = page.locator(
+            'input[placeholder*="添加作品标题"], input[placeholder*="填写作品标题"]'
+        ).first
         await title_input.wait_for(state="visible", timeout=120000)
-        await title_input.fill(title[:30])
+        title_placeholder = await title_input.get_attribute("placeholder") or ""
+        title_limit = 20 if "添加作品标题" in title_placeholder else 30
+        await title_input.fill((title or "")[:title_limit])
 
-        description_editor = page.locator('div.zone-container[contenteditable="true"]').first
+        description_editor = page.locator(
+            '[placeholder*="添加作品描述"], div.zone-container[contenteditable="true"]'
+        ).first
         await description_editor.wait_for(state="visible", timeout=120000)
         await description_editor.click()
-        await page.keyboard.press("Control+KeyA")
-        await page.keyboard.press("Delete")
+        await page.keyboard.press("ControlOrMeta+A")
+        await page.keyboard.press("Backspace")
+        if description:
+            await page.keyboard.type(description)
 
-        for tag in tags or []:
-            await page.keyboard.type(" #" + tag)
-            await page.keyboard.press("Space")
+        tags_editor = page.locator('[placeholder*="添加话题"]').first
+        if await tags_editor.count():
+            await tags_editor.click()
+            for tag in tags or []:
+                await page.keyboard.type("#" + tag)
+                await page.keyboard.press("Space")
+        else:
+            for tag in tags or []:
+                await page.keyboard.type(" #" + tag)
+                await page.keyboard.press("Space")
         await page.keyboard.press("Escape")  # 收起话题下拉，避免浮层拦截后续点击
 
     async def set_location(self, page: Page, location: str = ""):
@@ -780,7 +831,7 @@ class DouYinVideo(DouYinBaseUploader):
                         sms_prompt_logged = False
                         await self._submit_sms_verify_code(page, sms_input, code, code_file)
                     elif not sms_prompt_logged:
-                        douyin_logger.warning(_msg("⏳", f"等待验证码输入；可在交互终端直接输入，或写入文件: {code_file}"))
+                        douyin_logger.warning(_msg("⏳", f"等待验证码输入；可在交互终端直接输入、写入文件 {code_file}，或在 macOS 弹窗中输入"))
                         sms_prompt_logged = True
                 publish_button = page.get_by_role("button", name="发布", exact=True)
                 if await publish_button.count():
