@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Daily sync: YouTube Shorts (newest first) -> Bilibili only.
+"""Daily sync: YouTube Shorts (newest first) -> Kuaishou + Bilibili + Douyin.
 
 Rules:
-- Shorts only
-- 1 short per run (default)
-- Highest quality download (bv*+ba)
-- Skip shorts already uploaded to Bilibili
-- Chinese titles/descriptions from steak_copy_library.json in order
-- Delete local files after successful upload for that short
+- Shorts only (default channel @kochiasmr/shorts)
+- 1 short per run (schedule twice daily = 2/day)
+- Prefer H.264 1080p download (Douyin-friendly)
+- Each run must publish a brand-new short
+- If a short already has any of KS/Bili/Douyin history, skip to the next unused short
+- Chinese copy from food_process_copy_library.json in order
+- Delete local files after all three platforms succeed
 """
 
 from __future__ import annotations
@@ -22,25 +23,65 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CHANNEL = "https://www.youtube.com/@bbqbro/shorts"
+DEFAULT_CHANNEL = "https://www.youtube.com/@kochiasmr/shorts"
 DEFAULT_ACCOUNT = "boss rabbit"
-DEFAULT_STATE = ROOT / "data" / "yt_shorts_sync_state.json"
-DEFAULT_INBOX = ROOT / "videos" / "yt_inbox"
-DEFAULT_COPY_LIBRARY = ROOT / "data" / "steak_copy_library.json"
-DEFAULT_BILI_TID = 249
+DEFAULT_STATE = ROOT / "data" / "yt_food_sync_state.json"
+LEGACY_STATE = ROOT / "data" / "yt_xhs_sync_state.json"
+DEFAULT_INBOX = ROOT / "videos" / "yt_food_inbox"
+DEFAULT_COPY_LIBRARY = ROOT / "data" / "food_process_copy_library.json"
 DEFAULT_COOKIES_FROM_BROWSER = "edge"
+DEFAULT_KS_TAGS = "沉浸式"
+DEFAULT_DY_TAGS = "美食,制作过程,治愈"
+DEFAULT_BILI_TID = 249
+DEFAULT_BILI_TAGS = "美食,制作过程,治愈"
+PLATFORMS = ("kuaishou", "bilibili", "douyin")
+DEFAULT_YT_FORMAT = (
+    "bv*[vcodec^=avc1][height=1080]+ba[ext=m4a]/"
+    "bv*[vcodec^=avc1][height<=1080]+ba[ext=m4a]/"
+    "bv*[vcodec^=avc1]+ba[ext=m4a]/"
+    "b[ext=mp4]/"
+    "bv*+ba/b"
+)
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
+def _empty_entry() -> dict:
+    return {
+        "source_title": "",
+        "url": "",
+        "kuaishou": None,
+        "bilibili": None,
+        "douyin": None,
+        "copy": None,
+    }
+
+
+def _normalize_entry(entry: dict) -> dict:
+    entry.setdefault("source_title", "")
+    entry.setdefault("url", "")
+    entry.setdefault("kuaishou", None)
+    entry.setdefault("bilibili", None)
+    entry.setdefault("douyin", None)
+    entry.setdefault("copy", None)
+    return entry
+
+
 def _load_state(path: Path) -> dict:
-    if not path.exists():
-        return {"channel": "", "copy_index": 0, "items": {}}
-    data = json.loads(path.read_text(encoding="utf-8"))
+    if path.exists():
+        data = json.loads(path.read_text(encoding="utf-8"))
+    elif LEGACY_STATE.exists():
+        data = json.loads(LEGACY_STATE.read_text(encoding="utf-8"))
+        print(f"migrated state from {LEGACY_STATE.name}", flush=True)
+    else:
+        data = {"channel": "", "copy_index": 0, "items": {}}
     data.setdefault("copy_index", 0)
     data.setdefault("items", {})
+    for entry in data["items"].values():
+        if isinstance(entry, dict):
+            _normalize_entry(entry)
     return data
 
 
@@ -60,7 +101,6 @@ def _load_copy_library(path: Path) -> list[dict]:
 
 
 def allocate_copy(state: dict, copies: list[dict]) -> dict:
-    """按文案库顺序取下一条；用完后从头循环。"""
     idx = int(state.get("copy_index", 0))
     if idx >= len(copies):
         print(f"文案库已用完（共 {len(copies)} 条），从头循环", flush=True)
@@ -74,20 +114,20 @@ def allocate_copy(state: dict, copies: list[dict]) -> dict:
         "index": idx,
     }
 
+
 def _venv_bin(name: str) -> str:
     candidate = ROOT / ".venv" / "bin" / name
     if candidate.exists():
         return str(candidate)
     found = shutil.which(name)
     if not found:
-        raise RuntimeError(f"找不到命令: {name}（请先 source .venv/bin/activate 或安装依赖）")
+        raise RuntimeError(f"找不到命令: {name}")
     return found
 
 
 def _run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
     print("+", " ".join(cmd), flush=True)
     env = os.environ.copy()
-    # Avoid Cursor sandbox Playwright path leaking into scheduled jobs.
     env.pop("PLAYWRIGHT_BROWSERS_PATH", None)
     return subprocess.run(cmd, cwd=str(ROOT), env=env, check=check, text=True)
 
@@ -99,7 +139,7 @@ def _yt_dlp_cookie_args(cookies_from_browser: str | None) -> list[str]:
 
 
 def list_shorts(channel: str, lookback: int, cookies_from_browser: str | None = None) -> list[dict]:
-    yt_dlp = _venv_bin("yt-dlp") if (ROOT / ".venv" / "bin" / "yt-dlp").exists() else (shutil.which("yt-dlp") or "yt-dlp")
+    yt_dlp = shutil.which("yt-dlp") or "yt-dlp"
     cmd = [
         yt_dlp,
         "--no-update",
@@ -133,13 +173,19 @@ def list_shorts(channel: str, lookback: int, cookies_from_browser: str | None = 
 def is_done(entry: dict | None) -> bool:
     if not entry:
         return False
-    return bool(entry.get("bilibili"))
+    return all(bool(entry.get(p)) for p in PLATFORMS)
+
+
+def is_claimed(entry: dict | None) -> bool:
+    if not entry:
+        return False
+    return any(bool(entry.get(p)) for p in PLATFORMS)
 
 
 def pick_next(items: list[dict], state: dict) -> dict | None:
     records = state.setdefault("items", {})
     for item in items:
-        if not is_done(records.get(item["id"])):
+        if not is_claimed(records.get(item["id"])):
             return item
     return None
 
@@ -149,21 +195,21 @@ def download_highest(
     video_id: str,
     inbox: Path,
     cookies_from_browser: str | None = None,
+    format_selector: str = DEFAULT_YT_FORMAT,
 ) -> tuple[Path, str]:
     inbox.mkdir(parents=True, exist_ok=True)
-    # Clean any leftover files for this id first.
     for p in inbox.glob(f"*{video_id}*"):
         p.unlink(missing_ok=True)
 
     yt_dlp = shutil.which("yt-dlp") or "yt-dlp"
-    out_tmpl = str(inbox / f"shorts_%(upload_date)s_%(id)s_%(title).80B.%(ext)s")
+    out_tmpl = str(inbox / f"food_%(upload_date)s_%(id)s_%(title).80B.%(ext)s")
     _run(
         [
             yt_dlp,
             "--no-update",
             *_yt_dlp_cookie_args(cookies_from_browser),
             "-f",
-            "bv*+ba/b",
+            format_selector,
             "--merge-output-format",
             "mp4",
             "-o",
@@ -183,7 +229,6 @@ def download_highest(
     for info_path in infos:
         try:
             data = json.loads(info_path.read_text(encoding="utf-8"))
-            # Skip playlist metadata files.
             if data.get("_type") == "playlist":
                 continue
             if data.get("id") == video_id and data.get("title"):
@@ -207,7 +252,28 @@ def check_platform(sau: str, platform: str, account: str) -> bool:
     return proc.returncode == 0 and "valid" in out.splitlines()[-1]
 
 
-def upload_bilibili(sau: str, account: str, video: Path, title: str, desc: str, tid: int) -> None:
+def upload_kuaishou(sau: str, account: str, video: Path, title: str, desc: str, tags: str) -> None:
+    cmd = [
+        sau,
+        "kuaishou",
+        "upload-video",
+        "--account",
+        account,
+        "--file",
+        str(video),
+        "--title",
+        title[:100],
+        "--desc",
+        desc[:500],
+    ]
+    if tags.strip():
+        cmd.extend(["--tags", tags.strip()])
+    _run(cmd)
+
+
+def upload_bilibili(
+    sau: str, account: str, video: Path, title: str, desc: str, tid: int, tags: str
+) -> None:
     _run(
         [
             sau,
@@ -224,9 +290,28 @@ def upload_bilibili(sau: str, account: str, video: Path, title: str, desc: str, 
             "--tid",
             str(tid),
             "--tags",
-            "牛排,牛肉,美食",
+            tags,
         ]
     )
+
+
+def upload_douyin(sau: str, account: str, video: Path, title: str, desc: str, tags: str) -> None:
+    cmd = [
+        sau,
+        "douyin",
+        "upload-video",
+        "--account",
+        account,
+        "--file",
+        str(video),
+        "--title",
+        title[:20],
+        "--desc",
+        desc[:1000],
+    ]
+    if tags.strip():
+        cmd.extend(["--tags", tags.strip()])
+    _run(cmd)
 
 
 def cleanup_local(inbox: Path, video_id: str) -> None:
@@ -236,26 +321,25 @@ def cleanup_local(inbox: Path, video_id: str) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Sync YouTube Shorts to Bilibili")
-    parser.add_argument("--channel", default=DEFAULT_CHANNEL, help="YouTube Shorts tab URL")
-    parser.add_argument("--account", default=DEFAULT_ACCOUNT, help="sau account_name")
-    parser.add_argument("--daily-limit", type=int, default=1, help="How many new shorts to process per run")
-    parser.add_argument("--lookback", type=int, default=50, help="How many newest shorts to scan")
-    parser.add_argument("--bili-tid", type=int, default=DEFAULT_BILI_TID, help="Bilibili partition tid")
-    parser.add_argument("--state", type=Path, default=DEFAULT_STATE, help="State json path")
-    parser.add_argument("--inbox", type=Path, default=DEFAULT_INBOX, help="Download inbox dir")
-    parser.add_argument("--copy-library", type=Path, default=DEFAULT_COPY_LIBRARY, help="Chinese copy library json")
-    parser.add_argument(
-        "--cookies-from-browser",
-        default=DEFAULT_COOKIES_FROM_BROWSER,
-        help="yt-dlp browser cookies, e.g. edge/chrome/safari; empty to disable",
-    )
-    parser.add_argument("--dry-run", action="store_true", help="Only print next short, do not download/upload")
+    parser = argparse.ArgumentParser(description="Sync YouTube Shorts to Kuaishou + Bilibili + Douyin")
+    parser.add_argument("--channel", default=DEFAULT_CHANNEL)
+    parser.add_argument("--account", default=DEFAULT_ACCOUNT)
+    parser.add_argument("--daily-limit", type=int, default=1)
+    parser.add_argument("--lookback", type=int, default=50)
+    parser.add_argument("--state", type=Path, default=DEFAULT_STATE)
+    parser.add_argument("--inbox", type=Path, default=DEFAULT_INBOX)
+    parser.add_argument("--copy-library", type=Path, default=DEFAULT_COPY_LIBRARY)
+    parser.add_argument("--cookies-from-browser", default=DEFAULT_COOKIES_FROM_BROWSER)
+    parser.add_argument("--ks-tags", default=DEFAULT_KS_TAGS, help="Kuaishou tags without #")
+    parser.add_argument("--dy-tags", default=DEFAULT_DY_TAGS, help="Douyin tags without #")
+    parser.add_argument("--bili-tid", type=int, default=DEFAULT_BILI_TID)
+    parser.add_argument("--bili-tags", default=DEFAULT_BILI_TAGS, help="Bilibili tags without #")
+    parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--mark-uploaded",
         nargs=2,
         metavar=("VIDEO_ID", "PLATFORM"),
-        help="Manually mark a video uploaded on platform (bilibili)",
+        help="Manually mark uploaded: platform=kuaishou|bilibili|douyin",
     )
     args = parser.parse_args()
 
@@ -263,25 +347,30 @@ def main() -> int:
     state["channel"] = args.channel
     copies = _load_copy_library(args.copy_library)
     cookies_from_browser = (args.cookies_from_browser or "").strip() or None
+
     if args.mark_uploaded:
         video_id, platform = args.mark_uploaded
         platform = platform.lower()
-        if platform != "bilibili":
-            print("PLATFORM 只能是 bilibili", file=sys.stderr)
+        if platform not in PLATFORMS:
+            print("PLATFORM 只能是 kuaishou / bilibili / douyin", file=sys.stderr)
             return 2
-        entry = state.setdefault("items", {}).setdefault(video_id, {"title": "", "bilibili": None})
+        entry = _normalize_entry(state.setdefault("items", {}).setdefault(video_id, _empty_entry()))
         entry[platform] = _now_iso()
         _save_state(args.state, state)
         print(f"marked {video_id} -> {platform}")
         return 0
 
     sau = _venv_bin("sau")
-    print(f"checking cookies for account={args.account!r}", flush=True)
+    print(f"checking cookies for account={args.account!r} (kuaishou/bilibili/douyin)", flush=True)
+    ks_ok = check_platform(sau, "kuaishou", args.account)
     bili_ok = check_platform(sau, "bilibili", args.account)
-    if not bili_ok:
+    dy_ok = check_platform(sau, "douyin", args.account)
+    if not ks_ok or not bili_ok or not dy_ok:
         print(
             "cookie 无效，请先在本机执行：\n"
-            f'  sau bilibili login --account "{args.account}"',
+            f'  sau kuaishou login --account "{args.account}"\n'
+            f'  sau bilibili login --account "{args.account}"\n'
+            f'  sau douyin login --account "{args.account}"',
             file=sys.stderr,
         )
         return 3
@@ -296,18 +385,25 @@ def main() -> int:
     while processed < args.daily_limit:
         nxt = pick_next(items, state)
         if not nxt:
-            print("lookback 范围内已全部传完（B站）")
+            msg = "lookback 范围内没有未使用的新视频（快手+B站+抖音），本次未上传"
+            print(msg, file=sys.stderr)
+            if processed == 0:
+                return 6
             break
 
         video_id = nxt["id"]
-        entry = state.setdefault("items", {}).setdefault(
-            video_id,
-            {
-                "source_title": nxt["title"],
-                "url": nxt["url"],
-                "bilibili": None,
-                "copy": None,
-            },
+        entry = _normalize_entry(
+            state.setdefault("items", {}).setdefault(
+                video_id,
+                {
+                    "source_title": nxt["title"],
+                    "url": nxt["url"],
+                    "kuaishou": None,
+                    "bilibili": None,
+                    "douyin": None,
+                    "copy": None,
+                },
+            )
         )
         entry["source_title"] = nxt["title"]
         entry["url"] = nxt["url"]
@@ -317,7 +413,9 @@ def main() -> int:
                 copy = entry["copy"]
                 print(
                     f"next short: {video_id} | source={nxt['title']!r} | "
-                    f"copy#{copy.get('index', '?')}={copy.get('title')!r} | {nxt['url']}",
+                    f"copy#{copy.get('index', '?')}={copy.get('title')!r} | "
+                    f"ks={bool(entry.get('kuaishou'))} bili={bool(entry.get('bilibili'))} "
+                    f"dy={bool(entry.get('douyin'))}",
                     flush=True,
                 )
             else:
@@ -327,13 +425,14 @@ def main() -> int:
                 preview = copies[idx]
                 print(
                     f"next short: {video_id} | source={nxt['title']!r} | "
-                    f"would_use_copy#{idx}={preview['title']!r} | {nxt['url']}",
+                    f"would_use_copy#{idx}={preview['title']!r} | "
+                    f"ks={bool(entry.get('kuaishou'))} bili={bool(entry.get('bilibili'))} "
+                    f"dy={bool(entry.get('douyin'))}",
                     flush=True,
                 )
             print("dry-run: stop before download/upload")
             break
 
-        # 每条短视频固定占用一条中文文案；失败重试时不换文案、不跳号。
         if not entry.get("copy"):
             entry["copy"] = allocate_copy(state, copies)
             _save_state(args.state, state)
@@ -341,31 +440,49 @@ def main() -> int:
         copy = entry["copy"]
         publish_title = copy["title"]
         publish_desc = copy.get("desc") or publish_title
-
         print(
             f"next short: {video_id} | source={nxt['title']!r} | "
-            f"copy#{copy.get('index', '?')}={publish_title!r} | {nxt['url']}",
+            f"copy#{copy.get('index', '?')}={publish_title!r}",
             flush=True,
         )
 
         video_path, source_title = download_highest(
-            nxt["url"],
-            video_id,
-            args.inbox,
-            cookies_from_browser=cookies_from_browser,
+            nxt["url"], video_id, args.inbox, cookies_from_browser=cookies_from_browser
         )
         entry["source_title"] = source_title
-        print(f"downloaded: {video_path} | source_title={source_title}", flush=True)
-        print(f"publish_title={publish_title} | publish_desc={publish_desc}", flush=True)
+        print(f"downloaded: {video_path}", flush=True)
+        print(f"publish_title={publish_title}", flush=True)
 
         try:
+            if not entry.get("kuaishou"):
+                upload_kuaishou(
+                    sau, args.account, video_path, publish_title, publish_desc, args.ks_tags
+                )
+                entry["kuaishou"] = _now_iso()
+                _save_state(args.state, state)
+                print(f"kuaishou ok: {video_id}", flush=True)
+
             if not entry.get("bilibili"):
                 upload_bilibili(
-                    sau, args.account, video_path, publish_title, publish_desc, args.bili_tid
+                    sau,
+                    args.account,
+                    video_path,
+                    publish_title,
+                    publish_desc,
+                    args.bili_tid,
+                    args.bili_tags,
                 )
                 entry["bilibili"] = _now_iso()
                 _save_state(args.state, state)
                 print(f"bilibili ok: {video_id}", flush=True)
+
+            if not entry.get("douyin"):
+                upload_douyin(
+                    sau, args.account, video_path, publish_title, publish_desc, args.dy_tags
+                )
+                entry["douyin"] = _now_iso()
+                _save_state(args.state, state)
+                print(f"douyin ok: {video_id}", flush=True)
         finally:
             if is_done(entry):
                 cleanup_local(args.inbox, video_id)
