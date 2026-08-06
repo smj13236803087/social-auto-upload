@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Daily sync: YouTube Shorts (newest first) -> Kuaishou + Bilibili + Douyin.
+"""Daily sync: YouTube Shorts (newest first) -> Kuaishou + Bilibili.
 
 Rules:
 - Shorts only (default channel @kochiasmr/shorts)
 - Schedule 09:00 / 16:00 / 21:00 Beijing time, 1 short per run (= 3/day)
-- Prefer H.264 1080p download (Douyin-friendly)
+- Prefer H.264 1080p download (Douyin-friendly codecs also fine for KS/Bili)
 - Each run must publish a brand-new short
 - If a short already has download/platform history, skip to the next unused short
 - Chinese copy from food_process_copy_library.json in order
-- Delete local inbox files after all three auto platforms succeed
+- Delete local inbox files after Kuaishou + Bilibili succeed
+- Douyin is a separate job (sync_yt_douyin.py)
 - Xiaohongshu iCloud staging is a separate job (sync_yt_xhs_stage.py)
 """
 
@@ -37,7 +38,11 @@ DEFAULT_DY_TAGS = "美食,制作过程,治愈"
 DEFAULT_XHS_TAGS = "美食,制作过程,治愈,跟做"
 DEFAULT_BILI_TID = 249
 DEFAULT_BILI_TAGS = "美食,制作过程,治愈"
-PLATFORMS = ("kuaishou", "bilibili", "douyin")
+# Auto-upload targets for this job.
+FOOD_PLATFORMS = ("kuaishou", "bilibili")
+# Any of these means the short is already consumed (shared with douyin/xhs jobs).
+CLAIM_FIELDS = ("downloaded", "xhs_staged", "kuaishou", "bilibili", "douyin")
+PLATFORMS = ("kuaishou", "bilibili", "douyin")  # mark-uploaded allowlist
 BEIJING = ZoneInfo("Asia/Shanghai")
 DEFAULT_YT_FORMAT = (
     "bv*[vcodec^=avc1][height=1080]+ba[ext=m4a]/"
@@ -182,18 +187,17 @@ def list_shorts(channel: str, lookback: int, cookies_from_browser: str | None = 
 
 
 def is_done(entry: dict | None) -> bool:
+    """Kuaishou + Bilibili both done for this job."""
     if not entry:
         return False
-    return all(bool(entry.get(p)) for p in PLATFORMS)
+    return all(bool(entry.get(p)) for p in FOOD_PLATFORMS)
 
 
 def is_claimed(entry: dict | None) -> bool:
-    """Already consumed by a previous run — never reuse the same short."""
+    """Already consumed by food/douyin/xhs pipeline — never reuse."""
     if not entry:
         return False
-    if entry.get("downloaded") or entry.get("xhs_staged"):
-        return True
-    return any(bool(entry.get(p)) for p in PLATFORMS)
+    return any(bool(entry.get(field)) for field in CLAIM_FIELDS)
 
 
 def pick_next(items: list[dict], state: dict) -> dict | None:
@@ -403,7 +407,7 @@ def cleanup_previous_day_xhs_stages(stage_dir: Path, today: date) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Sync YouTube Shorts to Kuaishou + Bilibili + Douyin")
+    parser = argparse.ArgumentParser(description="Sync YouTube Shorts to Kuaishou + Bilibili")
     parser.add_argument("--channel", default=DEFAULT_CHANNEL)
     parser.add_argument("--account", default=DEFAULT_ACCOUNT)
     parser.add_argument("--daily-limit", type=int, default=1)
@@ -413,7 +417,6 @@ def main() -> int:
     parser.add_argument("--copy-library", type=Path, default=DEFAULT_COPY_LIBRARY)
     parser.add_argument("--cookies-from-browser", default=DEFAULT_COOKIES_FROM_BROWSER)
     parser.add_argument("--ks-tags", default=DEFAULT_KS_TAGS, help="Kuaishou tags without #")
-    parser.add_argument("--dy-tags", default=DEFAULT_DY_TAGS, help="Douyin tags without #")
     parser.add_argument("--bili-tid", type=int, default=DEFAULT_BILI_TID)
     parser.add_argument("--bili-tags", default=DEFAULT_BILI_TAGS, help="Bilibili tags without #")
     parser.add_argument("--dry-run", action="store_true")
@@ -443,16 +446,14 @@ def main() -> int:
         return 0
 
     sau = _venv_bin("sau")
-    print(f"checking cookies for account={args.account!r} (kuaishou/bilibili/douyin)", flush=True)
+    print(f"checking cookies for account={args.account!r} (kuaishou/bilibili)", flush=True)
     ks_ok = check_platform(sau, "kuaishou", args.account)
     bili_ok = check_platform(sau, "bilibili", args.account)
-    dy_ok = check_platform(sau, "douyin", args.account)
-    if not ks_ok or not bili_ok or not dy_ok:
+    if not ks_ok or not bili_ok:
         print(
             "cookie 无效，请先在本机执行：\n"
             f'  sau kuaishou login --account "{args.account}"\n'
-            f'  sau bilibili login --account "{args.account}"\n'
-            f'  sau douyin login --account "{args.account}"',
+            f'  sau bilibili login --account "{args.account}"',
             file=sys.stderr,
         )
         return 3
@@ -467,7 +468,7 @@ def main() -> int:
     while processed < args.daily_limit:
         nxt = pick_next(items, state)
         if not nxt:
-            msg = "lookback 范围内没有未使用的新视频（快手+B站+抖音），本次未上传"
+            msg = "lookback 范围内没有未使用的新视频（快手+B站），本次未上传"
             print(msg, file=sys.stderr)
             if processed == 0:
                 return 6
@@ -496,8 +497,7 @@ def main() -> int:
                 print(
                     f"next short: {video_id} | source={nxt['title']!r} | "
                     f"copy#{copy.get('index', '?')}={copy.get('title')!r} | "
-                    f"ks={bool(entry.get('kuaishou'))} bili={bool(entry.get('bilibili'))} "
-                    f"dy={bool(entry.get('douyin'))}",
+                    f"ks={bool(entry.get('kuaishou'))} bili={bool(entry.get('bilibili'))}",
                     flush=True,
                 )
             else:
@@ -508,8 +508,7 @@ def main() -> int:
                 print(
                     f"next short: {video_id} | source={nxt['title']!r} | "
                     f"would_use_copy#{idx}={preview['title']!r} | "
-                    f"ks={bool(entry.get('kuaishou'))} bili={bool(entry.get('bilibili'))} "
-                    f"dy={bool(entry.get('douyin'))}",
+                    f"ks={bool(entry.get('kuaishou'))} bili={bool(entry.get('bilibili'))}",
                     flush=True,
                 )
             print("dry-run: stop before download/upload")
@@ -559,14 +558,6 @@ def main() -> int:
                 entry["bilibili"] = _now_iso()
                 _save_state(args.state, state)
                 print(f"bilibili ok: {video_id}", flush=True)
-
-            if not entry.get("douyin"):
-                upload_douyin(
-                    sau, args.account, video_path, publish_title, publish_desc, args.dy_tags
-                )
-                entry["douyin"] = _now_iso()
-                _save_state(args.state, state)
-                print(f"douyin ok: {video_id}", flush=True)
         finally:
             if is_done(entry):
                 cleanup_local(args.inbox, video_id)

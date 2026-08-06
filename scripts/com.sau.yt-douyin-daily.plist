@@ -1,19 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  北京时间每天 09:00、16:00 和 21:00：@kochiasmr Shorts -> 快手 + B站（每次 1 条，一天 3 条）
-  文案库：food_process_copy_library.json
-  抖音是独立任务 com.sau.yt-douyin-daily（10:00 / 17:00）
+  北京时间每天 10:00、17:00 和 22:30：@kochiasmr Shorts -> 抖音（每次 1 条，一天 3 条）
+  与快手+B站任务分开调度；同源同文案库，共用去重状态。
 
   安装:
-    cp scripts/com.sau.yt-food-daily.plist ~/Library/LaunchAgents/
-    launchctl bootout gui/$(id -u)/com.sau.yt-food-daily 2>/dev/null
-    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sau.yt-food-daily.plist
+    cp scripts/com.sau.yt-douyin-daily.plist ~/Library/LaunchAgents/
+    launchctl bootout gui/$(id -u)/com.sau.yt-douyin-daily 2>/dev/null
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sau.yt-douyin-daily.plist
 -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.sau.yt-food-daily</string>
+  <string>com.sau.yt-douyin-daily</string>
 
   <key>WorkingDirectory</key>
   <string>/Applications/social-auto-upload</string>
@@ -21,7 +20,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>/Applications/social-auto-upload/.venv/bin/python</string>
-    <string>/Applications/social-auto-upload/scripts/sync_yt_food.py</string>
+    <string>/Applications/social-auto-upload/scripts/sync_yt_douyin.py</string>
     <string>--channel</string>
     <string>https://www.youtube.com/@kochiasmr/shorts</string>
     <string>--account</string>
@@ -36,28 +35,28 @@
   <array>
     <dict>
       <key>Hour</key>
-      <integer>9</integer>
+      <integer>10</integer>
       <key>Minute</key>
       <integer>0</integer>
     </dict>
     <dict>
       <key>Hour</key>
-      <integer>16</integer>
+      <integer>17</integer>
       <key>Minute</key>
       <integer>0</integer>
     </dict>
     <dict>
       <key>Hour</key>
-      <integer>21</integer>
+      <integer>22</integer>
       <key>Minute</key>
-      <integer>0</integer>
+      <integer>30</integer>
     </dict>
   </array>
 
   <key>StandardOutPath</key>
-  <string>/Applications/social-auto-upload/logs/yt_food_daily.out.log</string>
+  <string>/Applications/social-auto-upload/logs/yt_douyin_daily.out.log</string>
   <key>StandardErrorPath</key>
-  <string>/Applications/social-auto-upload/logs/yt_food_daily.err.log</string>
+  <string>/Applications/social-auto-upload/logs/yt_douyin_daily.err.log</string>
 
   <key>EnvironmentVariables</key>
   <dict>
