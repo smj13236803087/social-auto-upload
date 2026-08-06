@@ -3,12 +3,13 @@
 
 Rules:
 - Shorts only (default channel @kochiasmr/shorts)
-- 1 short per run (schedule twice daily = 2/day)
+- Schedule 09:00 / 16:00 / 21:00 Beijing time, 1 short per run (= 3/day)
 - Prefer H.264 1080p download (Douyin-friendly)
 - Each run must publish a brand-new short
-- If a short already has any of KS/Bili/Douyin history, skip to the next unused short
+- If a short already has download/platform history, skip to the next unused short
 - Chinese copy from food_process_copy_library.json in order
-- Delete local files after all three platforms succeed
+- Delete local inbox files after all three auto platforms succeed
+- Xiaohongshu iCloud staging is a separate job (sync_yt_xhs_stage.py)
 """
 
 from __future__ import annotations
@@ -19,8 +20,9 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CHANNEL = "https://www.youtube.com/@kochiasmr/shorts"
@@ -32,9 +34,11 @@ DEFAULT_COPY_LIBRARY = ROOT / "data" / "food_process_copy_library.json"
 DEFAULT_COOKIES_FROM_BROWSER = "edge"
 DEFAULT_KS_TAGS = "沉浸式"
 DEFAULT_DY_TAGS = "美食,制作过程,治愈"
+DEFAULT_XHS_TAGS = "美食,制作过程,治愈,跟做"
 DEFAULT_BILI_TID = 249
 DEFAULT_BILI_TAGS = "美食,制作过程,治愈"
 PLATFORMS = ("kuaishou", "bilibili", "douyin")
+BEIJING = ZoneInfo("Asia/Shanghai")
 DEFAULT_YT_FORMAT = (
     "bv*[vcodec^=avc1][height=1080]+ba[ext=m4a]/"
     "bv*[vcodec^=avc1][height<=1080]+ba[ext=m4a]/"
@@ -42,10 +46,17 @@ DEFAULT_YT_FORMAT = (
     "b[ext=mp4]/"
     "bv*+ba/b"
 )
+DEFAULT_XHS_STAGE_DIR = (
+    Path.home() / "Library/Mobile Documents/com~apple~CloudDocs/sau-xhs-待发"
+)
+
+
+def _beijing_now() -> datetime:
+    return datetime.now(BEIJING)
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    return _beijing_now().isoformat(timespec="seconds")
 
 
 def _empty_entry() -> dict:
@@ -177,8 +188,11 @@ def is_done(entry: dict | None) -> bool:
 
 
 def is_claimed(entry: dict | None) -> bool:
+    """Already consumed by a previous run — never reuse the same short."""
     if not entry:
         return False
+    if entry.get("downloaded") or entry.get("xhs_staged"):
+        return True
     return any(bool(entry.get(p)) for p in PLATFORMS)
 
 
@@ -320,6 +334,74 @@ def cleanup_local(inbox: Path, video_id: str) -> None:
         print(f"deleted {p}", flush=True)
 
 
+def _safe_name(text: str, max_len: int = 40) -> str:
+    bad = '<>:"/\\|?*\n\r\t'
+    cleaned = "".join("_" if ch in bad else ch for ch in text).strip().strip(".")
+    cleaned = cleaned or "untitled"
+    return cleaned[:max_len]
+
+
+def stage_for_xhs_manual(
+    video_path: Path,
+    *,
+    video_id: str,
+    title: str,
+    desc: str,
+    tags: str,
+    stage_dir: Path,
+) -> Path:
+    """Copy video + copy text into iCloud so phone can post Xiaohongshu manually."""
+    stamp = _beijing_now().strftime("%Y%m%d_%H%M")
+    folder = stage_dir / f"{stamp}_{_safe_name(title)}_{video_id}"
+    folder.mkdir(parents=True, exist_ok=True)
+
+    dest_video = folder / f"{_safe_name(title)}.mp4"
+    shutil.copy2(video_path, dest_video)
+
+    note = (
+        f"标题：{title[:20]}\n"
+        f"正文：{desc}\n"
+        f"话题：{' '.join('#' + t.strip() for t in tags.split(',') if t.strip())}\n"
+        f"\n"
+        f"源视频ID：{video_id}\n"
+        f"手机操作：打开「文件」App → iCloud 云盘 → sau-xhs-待发 → 本文件夹\n"
+        f"发完后可删除本文件夹。\n"
+    )
+    (folder / "文案.txt").write_text(note, encoding="utf-8")
+    print(f"xhs manual stage: {folder}", flush=True)
+    return folder
+
+
+def _folder_stage_date(name: str) -> date | None:
+    """Parse YYYYMMDD from staged folder name like 20260814_0800_标题_id."""
+    if len(name) < 8 or not name[:8].isdigit():
+        return None
+    try:
+        return date(int(name[:4]), int(name[4:6]), int(name[6:8]))
+    except ValueError:
+        return None
+
+
+def cleanup_previous_day_xhs_stages(stage_dir: Path, today: date) -> int:
+    """Delete iCloud staged folders from before today (previous day's 2 videos, etc.)."""
+    if not stage_dir.exists():
+        return 0
+    deleted = 0
+    for path in sorted(stage_dir.iterdir()):
+        if not path.is_dir():
+            continue
+        folder_day = _folder_stage_date(path.name)
+        if folder_day is None:
+            continue
+        if folder_day < today:
+            shutil.rmtree(path, ignore_errors=True)
+            print(f"deleted old xhs stage: {path.name}", flush=True)
+            deleted += 1
+    if deleted:
+        print(f"cleaned {deleted} previous-day xhs stage folder(s)", flush=True)
+    return deleted
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sync YouTube Shorts to Kuaishou + Bilibili + Douyin")
     parser.add_argument("--channel", default=DEFAULT_CHANNEL)
@@ -450,6 +532,8 @@ def main() -> int:
             nxt["url"], video_id, args.inbox, cookies_from_browser=cookies_from_browser
         )
         entry["source_title"] = source_title
+        entry["downloaded"] = _now_iso()
+        _save_state(args.state, state)
         print(f"downloaded: {video_path}", flush=True)
         print(f"publish_title={publish_title}", flush=True)
 
