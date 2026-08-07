@@ -70,7 +70,15 @@ def main() -> int:
         return 4
 
     processed = 0
+    quality_tries = 0
     while processed < args.daily_limit:
+        if quality_tries >= food.DEFAULT_MAX_QUALITY_TRIES:
+            print(
+                f"已试 {food.DEFAULT_MAX_QUALITY_TRIES} 个视频清晰度都不达标，本次发布任务停止",
+                file=sys.stderr,
+            )
+            return 7
+
         nxt = food.pick_next(items, state)
         if not nxt:
             msg = "lookback 范围内没有未使用的新视频（小红书云盘待发），本次未下载"
@@ -80,6 +88,7 @@ def main() -> int:
             break
 
         video_id = nxt["id"]
+        quality_tries += 1
         entry = food._normalize_entry(
             state.setdefault("items", {}).setdefault(
                 video_id,
@@ -111,26 +120,41 @@ def main() -> int:
             print("dry-run: stop before download/stage")
             break
 
+        print(
+            f"candidate {quality_tries}/{food.DEFAULT_MAX_QUALITY_TRIES}: {video_id} | "
+            f"source={nxt['title']!r}",
+            flush=True,
+        )
+
+        try:
+            video_path, source_title = food.download_highest(
+                nxt["url"], video_id, args.inbox, cookies_from_browser=cookies_from_browser
+            )
+        except food.QualityRejected as exc:
+            food.mark_quality_rejected(
+                state,
+                entry,
+                video_id=video_id,
+                inbox=args.inbox,
+                reason=str(exc),
+                state_path=args.state,
+            )
+            continue
+
+        entry["source_title"] = source_title
+        entry["downloaded"] = food._now_iso()
         if not entry.get("copy"):
             entry["copy"] = food.allocate_copy(state, copies)
-            food._save_state(args.state, state)
+        food._save_state(args.state, state)
 
         copy = entry["copy"]
         publish_title = copy["title"]
         publish_desc = copy.get("desc") or publish_title
+        print(f"downloaded: {video_path}", flush=True)
         print(
-            f"next short: {video_id} | source={nxt['title']!r} | "
-            f"copy#{copy.get('index', '?')}={publish_title!r}",
+            f"stage_title={publish_title!r} | copy#{copy.get('index', '?')}",
             flush=True,
         )
-
-        video_path, source_title = food.download_highest(
-            nxt["url"], video_id, args.inbox, cookies_from_browser=cookies_from_browser
-        )
-        entry["source_title"] = source_title
-        entry["downloaded"] = food._now_iso()
-        food._save_state(args.state, state)
-        print(f"downloaded: {video_path}", flush=True)
 
         food.stage_for_xhs_manual(
             video_path,

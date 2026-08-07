@@ -5,6 +5,8 @@ Rules:
 - Shorts only (default channel @kochiasmr/shorts)
 - Schedule 09:00 / 16:00 / 21:00 Beijing time, 1 short per run (= 3/day)
 - Prefer H.264 1080p download (Douyin-friendly codecs also fine for KS/Bili)
+- After download, verify H.264 clarity; if soft, pin best format and re-download once
+- If still soft, skip to next short (max 5 tries / run), then stop the job
 - Each run must publish a brand-new short
 - If a short already has download/platform history, skip to the next unused short
 - Chinese copy from food_process_copy_library.json in order
@@ -41,12 +43,29 @@ DEFAULT_BILI_TAGS = "美食,制作过程,治愈"
 # Auto-upload targets for this job.
 FOOD_PLATFORMS = ("kuaishou", "bilibili")
 # Any of these means the short is already consumed (shared with douyin/xhs jobs).
-CLAIM_FIELDS = ("downloaded", "xhs_staged", "kuaishou", "bilibili", "douyin")
+CLAIM_FIELDS = (
+    "downloaded",
+    "xhs_staged",
+    "kuaishou",
+    "bilibili",
+    "douyin",
+    "quality_rejected",
+)
 PLATFORMS = ("kuaishou", "bilibili", "douyin")  # mark-uploaded allowlist
+# Per scheduled run: try at most N shorts for clarity; then stop the job.
+DEFAULT_MAX_QUALITY_TRIES = 5
 BEIJING = ZoneInfo("Asia/Shanghai")
+
+
+class QualityRejected(RuntimeError):
+    """Downloaded file still below required clarity after pin-retry."""
+
+
+# Portrait Shorts: 1080p means width=1080 (height~1920). Filtering height=1080 wrongly picks 480p.
 DEFAULT_YT_FORMAT = (
+    "bv*[vcodec^=avc1][width=1080]+ba[ext=m4a]/"
     "bv*[vcodec^=avc1][height=1080]+ba[ext=m4a]/"
-    "bv*[vcodec^=avc1][height<=1080]+ba[ext=m4a]/"
+    "bv*[vcodec^=avc1][width>=720]+ba[ext=m4a]/"
     "bv*[vcodec^=avc1]+ba[ext=m4a]/"
     "b[ext=mp4]/"
     "bv*+ba/b"
@@ -72,6 +91,8 @@ def _empty_entry() -> dict:
         "bilibili": None,
         "douyin": None,
         "copy": None,
+        "quality_rejected": None,
+        "quality_reject_reason": None,
     }
 
 
@@ -82,6 +103,8 @@ def _normalize_entry(entry: dict) -> dict:
     entry.setdefault("bilibili", None)
     entry.setdefault("douyin", None)
     entry.setdefault("copy", None)
+    entry.setdefault("quality_rejected", None)
+    entry.setdefault("quality_reject_reason", None)
     return entry
 
 
@@ -208,13 +231,164 @@ def pick_next(items: list[dict], state: dict) -> dict | None:
     return None
 
 
-def download_highest(
+def _probe_video(path: Path) -> dict:
+    """Return width/height/codec from local mp4 via ffprobe."""
+    ffprobe = shutil.which("ffprobe") or "ffprobe"
+    proc = subprocess.run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,codec_name",
+            "-of",
+            "json",
+            str(path),
+        ],
+        cwd=str(ROOT),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    streams = (json.loads(proc.stdout) or {}).get("streams") or []
+    if not streams:
+        raise RuntimeError(f"ffprobe 未读到视频轨: {path}")
+    stream = streams[0]
+    width = int(stream.get("width") or 0)
+    height = int(stream.get("height") or 0)
+    codec = str(stream.get("codec_name") or "")
+    if width <= 0 or height <= 0:
+        raise RuntimeError(f"ffprobe 分辨率异常: {path} -> {width}x{height}")
+    return {"width": width, "height": height, "codec": codec}
+
+
+def _is_avc_format(fmt: dict) -> bool:
+    vcodec = str(fmt.get("vcodec") or "").lower()
+    return vcodec.startswith("avc1") or vcodec.startswith("avc") or vcodec == "h264"
+
+
+def _best_avc_dims_from_info(info: dict) -> tuple[int, int, str]:
+    """Best H.264 progressive dims from yt-dlp info.json formats list."""
+    best_w = best_h = 0
+    best_id = ""
+    for fmt in info.get("formats") or []:
+        if not isinstance(fmt, dict):
+            continue
+        if not _is_avc_format(fmt):
+            continue
+        width = int(fmt.get("width") or 0)
+        height = int(fmt.get("height") or 0)
+        if width <= 0 or height <= 0:
+            continue
+        # Skip audio-only / tiny stubs.
+        if width * height < 160 * 160:
+            continue
+        if width * height > best_w * best_h:
+            best_w, best_h = width, height
+            best_id = str(fmt.get("format_id") or "")
+    return best_w, best_h, best_id
+
+
+def _load_info_json(inbox: Path, video_id: str) -> tuple[dict | None, Path | None]:
+    infos = sorted(inbox.glob(f"*{video_id}*.info.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for info_path in infos:
+        try:
+            data = json.loads(info_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if data.get("_type") == "playlist":
+            continue
+        if data.get("id") == video_id:
+            return data, info_path
+    return None, None
+
+
+def _pinned_best_avc_selector(info: dict) -> str | None:
+    """Force exact best H.264 video id + best m4a audio."""
+    _best_w, _best_h, best_id = _best_avc_dims_from_info(info)
+    if not best_id:
+        return None
+    return f"{best_id}+bestaudio[ext=m4a]/{best_id}+bestaudio/{best_id}"
+
+
+def evaluate_highest_quality(
+    video_path: Path, info: dict | None
+) -> tuple[bool, dict, str]:
+    """Return (ok, probe, detail). Soft-fail when below best available H.264."""
+    probe = _probe_video(video_path)
+    got_w, got_h = probe["width"], probe["height"]
+    got_pixels = got_w * got_h
+
+    best_w = best_h = 0
+    best_id = ""
+    if info:
+        best_w, best_h, best_id = _best_avc_dims_from_info(info)
+
+    if max(got_w, got_h) < 720:
+        return (
+            False,
+            probe,
+            f"本地 {got_w}x{got_h} {probe['codec']} 低于 720p 底线",
+        )
+
+    if best_w > 0 and best_h > 0:
+        best_pixels = best_w * best_h
+        detail = (
+            f"本地 {got_w}x{got_h} {probe['codec']} vs 最佳 H.264 "
+            f"{best_w}x{best_h}"
+            + (f" #{best_id}" if best_id else "")
+        )
+        if got_pixels < int(best_pixels * 0.9):
+            return False, probe, f"未达最高档: {detail}"
+        return True, probe, detail
+
+    if max(got_w, got_h) < 1080:
+        return (
+            False,
+            probe,
+            f"无格式列表且本地仅 {got_w}x{got_h}，未达 1080 档",
+        )
+    return True, probe, f"本地 {got_w}x{got_h} {probe['codec']} (无格式列表，已达 1080 档)"
+
+
+def assert_highest_quality(video_path: Path, info: dict | None) -> dict:
+    ok, probe, detail = evaluate_highest_quality(video_path, info)
+    if not ok:
+        raise QualityRejected(f"清晰度不合格: {detail}")
+    print(f"quality check ok: {detail}", flush=True)
+    return probe
+
+
+def mark_quality_rejected(
+    state: dict,
+    entry: dict,
+    *,
+    video_id: str,
+    inbox: Path,
+    reason: str,
+    state_path: Path | None = None,
+) -> None:
+    """Consume this short so later runs skip it; clean local files."""
+    entry["quality_rejected"] = _now_iso()
+    entry["quality_reject_reason"] = (reason or "")[:400]
+    cleanup_local(inbox, video_id)
+    if state_path is not None:
+        _save_state(state_path, state)
+    print(
+        f"quality rejected, skip video: {video_id} | {entry['quality_reject_reason']}",
+        flush=True,
+    )
+
+
+def _download_with_format(
     url: str,
     video_id: str,
     inbox: Path,
+    format_selector: str,
     cookies_from_browser: str | None = None,
-    format_selector: str = DEFAULT_YT_FORMAT,
-) -> tuple[Path, str]:
+) -> Path:
     inbox.mkdir(parents=True, exist_ok=True)
     for p in inbox.glob(f"*{video_id}*"):
         p.unlink(missing_ok=True)
@@ -236,24 +410,50 @@ def download_highest(
             url,
         ]
     )
-
     videos = sorted(inbox.glob(f"*{video_id}*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not videos:
         raise RuntimeError(f"下载完成但未找到 mp4: {video_id}")
-    video_path = videos[0]
+    return videos[0]
 
-    title = video_id
-    infos = sorted(inbox.glob(f"*{video_id}*.info.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    for info_path in infos:
-        try:
-            data = json.loads(info_path.read_text(encoding="utf-8"))
-            if data.get("_type") == "playlist":
-                continue
-            if data.get("id") == video_id and data.get("title"):
-                title = data["title"]
-                break
-        except Exception:
-            continue
+
+def download_highest(
+    url: str,
+    video_id: str,
+    inbox: Path,
+    cookies_from_browser: str | None = None,
+    format_selector: str = DEFAULT_YT_FORMAT,
+) -> tuple[Path, str]:
+    """Download best practical H.264; if soft, pin best format and retry once."""
+    video_path = _download_with_format(
+        url, video_id, inbox, format_selector, cookies_from_browser=cookies_from_browser
+    )
+    info, _ = _load_info_json(inbox, video_id)
+    title = (info or {}).get("title") or video_id
+
+    ok, probe, detail = evaluate_highest_quality(video_path, info)
+    if not ok:
+        pinned = _pinned_best_avc_selector(info or {})
+        if not pinned:
+            raise QualityRejected(f"清晰度不合格且无法锁定更高清格式: {detail}")
+        print(
+            f"quality low ({detail}); re-download pinned format: {pinned}",
+            flush=True,
+        )
+        video_path = _download_with_format(
+            url, video_id, inbox, pinned, cookies_from_browser=cookies_from_browser
+        )
+        info, _ = _load_info_json(inbox, video_id)
+        if info and info.get("title"):
+            title = info["title"]
+        ok, probe, detail = evaluate_highest_quality(video_path, info)
+        if not ok:
+            raise QualityRejected(f"重下后仍不达标: {detail}")
+
+    print(f"quality check ok: {detail}", flush=True)
+    print(
+        f"ready to publish: {probe['width']}x{probe['height']} {probe['codec']}",
+        flush=True,
+    )
     return video_path, title
 
 
@@ -465,7 +665,15 @@ def main() -> int:
         return 4
 
     processed = 0
+    quality_tries = 0
     while processed < args.daily_limit:
+        if quality_tries >= DEFAULT_MAX_QUALITY_TRIES:
+            print(
+                f"已试 {DEFAULT_MAX_QUALITY_TRIES} 个视频清晰度都不达标，本次发布任务停止",
+                file=sys.stderr,
+            )
+            return 7
+
         nxt = pick_next(items, state)
         if not nxt:
             msg = "lookback 范围内没有未使用的新视频（快手+B站），本次未上传"
@@ -475,6 +683,7 @@ def main() -> int:
             break
 
         video_id = nxt["id"]
+        quality_tries += 1
         entry = _normalize_entry(
             state.setdefault("items", {}).setdefault(
                 video_id,
@@ -514,27 +723,41 @@ def main() -> int:
             print("dry-run: stop before download/upload")
             break
 
+        print(
+            f"candidate {quality_tries}/{DEFAULT_MAX_QUALITY_TRIES}: {video_id} | "
+            f"source={nxt['title']!r}",
+            flush=True,
+        )
+
+        try:
+            video_path, source_title = download_highest(
+                nxt["url"], video_id, args.inbox, cookies_from_browser=cookies_from_browser
+            )
+        except QualityRejected as exc:
+            mark_quality_rejected(
+                state,
+                entry,
+                video_id=video_id,
+                inbox=args.inbox,
+                reason=str(exc),
+                state_path=args.state,
+            )
+            continue
+
+        entry["source_title"] = source_title
+        entry["downloaded"] = _now_iso()
         if not entry.get("copy"):
             entry["copy"] = allocate_copy(state, copies)
-            _save_state(args.state, state)
+        _save_state(args.state, state)
 
         copy = entry["copy"]
         publish_title = copy["title"]
         publish_desc = copy.get("desc") or publish_title
+        print(f"downloaded: {video_path}", flush=True)
         print(
-            f"next short: {video_id} | source={nxt['title']!r} | "
-            f"copy#{copy.get('index', '?')}={publish_title!r}",
+            f"publish_title={publish_title!r} | copy#{copy.get('index', '?')}",
             flush=True,
         )
-
-        video_path, source_title = download_highest(
-            nxt["url"], video_id, args.inbox, cookies_from_browser=cookies_from_browser
-        )
-        entry["source_title"] = source_title
-        entry["downloaded"] = _now_iso()
-        _save_state(args.state, state)
-        print(f"downloaded: {video_path}", flush=True)
-        print(f"publish_title={publish_title}", flush=True)
 
         try:
             if not entry.get("kuaishou"):
