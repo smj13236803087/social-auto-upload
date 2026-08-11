@@ -64,6 +64,8 @@
     <string>/Applications/social-auto-upload/.venv/bin:/Users/shaomaojia/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>TZ</key>
     <string>Asia/Shanghai</string>
+    <key>PLAYWRIGHT_BROWSERS_PATH</key>
+    <string>/Users/shaomaojia/Library/Caches/ms-playwright</string>
   </dict>
 </dict>
 </plist>

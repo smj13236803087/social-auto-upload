@@ -41,6 +41,8 @@ def main() -> int:
     copies = food._load_copy_library(args.copy_library)
     cookies_from_browser = (args.cookies_from_browser or "").strip() or None
 
+    food.ensure_playwright_chromium()
+
     sau = food._venv_bin("sau")
     print(f"checking cookies for account={args.account!r} (douyin)", flush=True)
     dy_ok = food.check_platform(sau, "douyin", args.account)

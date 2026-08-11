@@ -73,6 +73,8 @@ DEFAULT_YT_FORMAT = (
 DEFAULT_XHS_STAGE_DIR = (
     Path.home() / "Library/Mobile Documents/com~apple~CloudDocs/sau-xhs-待发"
 )
+# Always use the real user cache — never Cursor/temp sandbox browser caches.
+STABLE_PLAYWRIGHT_BROWSERS_PATH = Path.home() / "Library/Caches/ms-playwright"
 
 
 def _beijing_now() -> datetime:
@@ -164,11 +166,73 @@ def _venv_bin(name: str) -> str:
     return found
 
 
+def _playwright_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """Force browsers into a stable on-disk path for LaunchAgent reliability."""
+    env = dict(base if base is not None else os.environ)
+    env["PLAYWRIGHT_BROWSERS_PATH"] = str(STABLE_PLAYWRIGHT_BROWSERS_PATH)
+    return env
+
+
+def ensure_playwright_chromium() -> Path:
+    """Make sure Chromium exists before KS/Douyin browser automation.
+
+    Root cause of prior outages: browser binary missing under ms-playwright
+    (cache wipe / wrong PLAYWRIGHT_BROWSERS_PATH). Reinstall automatically.
+    """
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(STABLE_PLAYWRIGHT_BROWSERS_PATH)
+    STABLE_PLAYWRIGHT_BROWSERS_PATH.mkdir(parents=True, exist_ok=True)
+
+    def _exe_path() -> Path | None:
+        try:
+            from patchright.sync_api import sync_playwright
+        except Exception as exc:
+            print(f"patchright import failed: {exc}", file=sys.stderr)
+            return None
+        try:
+            with sync_playwright() as p:
+                return Path(p.chromium.executable_path)
+        except Exception as exc:
+            print(f"playwright chromium probe failed: {exc}", file=sys.stderr)
+            return None
+
+    exe = _exe_path()
+    if exe is not None and exe.exists():
+        print(f"playwright chromium ok: {exe}", flush=True)
+        return exe
+
+    print(
+        "playwright chromium missing; installing into "
+        f"{STABLE_PLAYWRIGHT_BROWSERS_PATH} ...",
+        flush=True,
+    )
+    install = subprocess.run(
+        [sys.executable, "-m", "patchright", "install", "chromium"],
+        cwd=str(ROOT),
+        env=_playwright_env(),
+        text=True,
+        check=False,
+    )
+    if install.returncode != 0:
+        raise RuntimeError(
+            "自动安装 Playwright Chromium 失败。"
+            "请本机执行: "
+            f'PLAYWRIGHT_BROWSERS_PATH="{STABLE_PLAYWRIGHT_BROWSERS_PATH}" '
+            f"{sys.executable} -m patchright install chromium"
+        )
+
+    exe = _exe_path()
+    if exe is None or not exe.exists():
+        raise RuntimeError(
+            "Chromium 安装后仍不可用，拒绝继续发布。"
+            f"期望目录: {STABLE_PLAYWRIGHT_BROWSERS_PATH}"
+        )
+    print(f"playwright chromium installed: {exe}", flush=True)
+    return exe
+
+
 def _run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
     print("+", " ".join(cmd), flush=True)
-    env = os.environ.copy()
-    env.pop("PLAYWRIGHT_BROWSERS_PATH", None)
-    return subprocess.run(cmd, cwd=str(ROOT), env=env, check=check, text=True)
+    return subprocess.run(cmd, cwd=str(ROOT), env=_playwright_env(), check=check, text=True)
 
 
 def _yt_dlp_cookie_args(cookies_from_browser: str | None) -> list[str]:
@@ -191,9 +255,9 @@ def list_shorts(channel: str, lookback: int, cookies_from_browser: str | None = 
         channel,
     ]
     print("+", " ".join(cmd), flush=True)
-    env = os.environ.copy()
-    env.pop("PLAYWRIGHT_BROWSERS_PATH", None)
-    proc = subprocess.run(cmd, cwd=str(ROOT), env=env, check=True, text=True, capture_output=True)
+    proc = subprocess.run(
+        cmd, cwd=str(ROOT), env=_playwright_env(), check=True, text=True, capture_output=True
+    )
     items: list[dict] = []
     for line in proc.stdout.splitlines():
         line = line.strip()
@@ -461,7 +525,7 @@ def check_platform(sau: str, platform: str, account: str) -> bool:
     proc = subprocess.run(
         [sau, platform, "check", "--account", account],
         cwd=str(ROOT),
-        env={k: v for k, v in os.environ.items() if k != "PLAYWRIGHT_BROWSERS_PATH"},
+        env=_playwright_env(),
         text=True,
         capture_output=True,
     )
@@ -644,6 +708,8 @@ def main() -> int:
         _save_state(args.state, state)
         print(f"marked {video_id} -> {platform}")
         return 0
+
+    ensure_playwright_chromium()
 
     sau = _venv_bin("sau")
     print(f"checking cookies for account={args.account!r} (kuaishou/bilibili)", flush=True)
