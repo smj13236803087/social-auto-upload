@@ -618,25 +618,73 @@ def stage_for_xhs_manual(
     tags: str,
     stage_dir: Path,
 ) -> Path:
-    """Copy video + copy text into iCloud so phone can post Xiaohongshu manually."""
+    """Copy video + copy text into iCloud for one-tap iPhone Shortcut posting.
+
+    Layout:
+    - dated folder: archive for the day
+    - sau-xhs-待发/最新待发/: fixed path the Shortcut always opens
+      - *.mp4
+      - 一键粘贴.txt  (clipboard body)
+      - 标题.txt
+    """
     stamp = _beijing_now().strftime("%Y%m%d_%H%M")
+    short_title = title[:20]
+    tag_line = " ".join("#" + t.strip() for t in tags.split(",") if t.strip())
+    paste_body = f"{desc}\n\n{tag_line}".strip() + "\n"
+    how_to = (
+        "【手机一键发】\n"
+        "1. 打开「快捷指令」App，运行「发小红书待发」\n"
+        "2. 它会：视频存相册 + 文案进剪贴板 + 打开小红书\n"
+        "3. 小红书里：标题填「标题.txt」内容，正文长按粘贴，选刚进相册的视频\n"
+        "\n"
+        f"标题：{short_title}\n"
+        f"正文：{desc}\n"
+        f"话题：{tag_line}\n"
+        f"源视频ID：{video_id}\n"
+        "发完后可删本文件夹；「最新待发」下次会被覆盖。\n"
+    )
+
     folder = stage_dir / f"{stamp}_{_safe_name(title)}_{video_id}"
     folder.mkdir(parents=True, exist_ok=True)
-
     dest_video = folder / f"{_safe_name(title)}.mp4"
     shutil.copy2(video_path, dest_video)
+    (folder / "标题.txt").write_text(short_title + "\n", encoding="utf-8")
+    (folder / "一键粘贴.txt").write_text(paste_body, encoding="utf-8")
+    (folder / "文案.txt").write_text(how_to, encoding="utf-8")
 
-    note = (
-        f"标题：{title[:20]}\n"
-        f"正文：{desc}\n"
-        f"话题：{' '.join('#' + t.strip() for t in tags.split(',') if t.strip())}\n"
-        f"\n"
-        f"源视频ID：{video_id}\n"
-        f"手机操作：打开「文件」App → iCloud 云盘 → sau-xhs-待发 → 本文件夹\n"
-        f"发完后可删除本文件夹。\n"
-    )
-    (folder / "文案.txt").write_text(note, encoding="utf-8")
+    # Fixed path for Shortcuts (always the same folder name on phone).
+    latest = stage_dir / "最新待发"
+    if latest.exists():
+        shutil.rmtree(latest, ignore_errors=True)
+    latest.mkdir(parents=True, exist_ok=True)
+    latest_video = latest / f"{_safe_name(title)}.mp4"
+    shutil.copy2(video_path, latest_video)
+    (latest / "标题.txt").write_text(short_title + "\n", encoding="utf-8")
+    (latest / "一键粘贴.txt").write_text(paste_body, encoding="utf-8")
+    (latest / "文案.txt").write_text(how_to, encoding="utf-8")
+
+    guide = stage_dir / "快捷指令说明.txt"
+    if not guide.exists():
+        guide.write_text(
+            "快捷指令名称：发小红书待发\n"
+            "\n"
+            "在 iPhone「快捷指令」里新建，按顺序添加动作：\n"
+            "1. 获取文件 → 选取「sau-xhs-待发 / 最新待发」文件夹里的视频（.mp4）\n"
+            "   （或：获取文件夹内容 → sau-xhs-待发/最新待发 → 筛选 mp4）\n"
+            "2. 存储到照片图库\n"
+            "3. 获取文件 → 同一文件夹里的「一键粘贴.txt」\n"
+            "4. 获取文件的文本\n"
+            "5. 拷贝到剪贴板\n"
+            "6. 获取文件 → 「标题.txt」→ 获取文本 → 显示通知（提醒你填标题）\n"
+            "7. 打开 App → 小红书\n"
+            "\n"
+            "把该快捷指令加到主屏幕后，每次点一下即可。\n"
+            "详细图文步骤见电脑项目里 scripts/xhs-iphone-shortcut.md\n",
+            encoding="utf-8",
+        )
+
     print(f"xhs manual stage: {folder}", flush=True)
+    print(f"xhs latest alias: {latest}", flush=True)
     return folder
 
 
