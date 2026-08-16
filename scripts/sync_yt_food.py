@@ -7,6 +7,8 @@ Rules:
 - Prefer H.264 1080p download (Douyin-friendly codecs also fine for KS/Bili)
 - After download, verify H.264 clarity; if soft, pin best format and re-download once
 - If still soft, skip to next short (max 5 tries / run), then stop the job
+- Each job only skips shorts already done for ITS platforms (KS+Bili / Douyin / XHS
+  independently). quality_rejected is still global. Lookback auto-expands if empty.
 - Each run must publish a brand-new short
 - If a short already has download/platform history, skip to the next unused short
 - Chinese copy from food_process_copy_library.json in order
@@ -23,6 +25,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -42,7 +45,7 @@ DEFAULT_BILI_TID = 249
 DEFAULT_BILI_TAGS = "美食,制作过程,治愈"
 # Auto-upload targets for this job.
 FOOD_PLATFORMS = ("kuaishou", "bilibili")
-# Any of these means the short is already consumed (shared with douyin/xhs jobs).
+# Legacy global claim list (unused for picking). Kept for docs / mark-uploaded.
 CLAIM_FIELDS = (
     "downloaded",
     "xhs_staged",
@@ -54,6 +57,8 @@ CLAIM_FIELDS = (
 PLATFORMS = ("kuaishou", "bilibili", "douyin")  # mark-uploaded allowlist
 # Per scheduled run: try at most N shorts for clarity; then stop the job.
 DEFAULT_MAX_QUALITY_TRIES = 5
+DEFAULT_LOOKBACK = 150
+LOOKBACK_FALLBACKS = (400, 1000)
 BEIJING = ZoneInfo("Asia/Shanghai")
 
 
@@ -280,19 +285,62 @@ def is_done(entry: dict | None) -> bool:
     return all(bool(entry.get(p)) for p in FOOD_PLATFORMS)
 
 
-def is_claimed(entry: dict | None) -> bool:
-    """Already consumed by food/douyin/xhs pipeline — never reuse."""
-    if not entry:
-        return False
-    return any(bool(entry.get(field)) for field in CLAIM_FIELDS)
+def pick_next_for(
+    items: list[dict], state: dict, platforms: tuple[str, ...]
+) -> dict | None:
+    """Newest short that still needs at least one of `platforms`.
+
+    quality_rejected is always skipped. Other jobs' platform marks do not block.
+    """
+    records = state.setdefault("items", {})
+    for item in items:
+        entry = records.get(item["id"])
+        if entry and entry.get("quality_rejected"):
+            continue
+        if not entry or any(not entry.get(p) for p in platforms):
+            return item
+    return None
 
 
 def pick_next(items: list[dict], state: dict) -> dict | None:
-    records = state.setdefault("items", {})
-    for item in items:
-        if not is_claimed(records.get(item["id"])):
-            return item
-    return None
+    """Backward-compatible: food job (kuaishou + bilibili)."""
+    return pick_next_for(items, state, FOOD_PLATFORMS)
+
+
+def list_shorts_until_pick(
+    channel: str,
+    state: dict,
+    platforms: tuple[str, ...],
+    *,
+    lookback: int,
+    cookies_from_browser: str | None = None,
+    fallbacks: tuple[int, ...] = LOOKBACK_FALLBACKS,
+) -> tuple[list[dict], dict | None]:
+    """List shorts; if none free for `platforms`, expand lookback and retry."""
+    seen: set[int] = set()
+    plan: list[int] = []
+    for lb in (lookback, *fallbacks):
+        if lb > 0 and lb not in seen:
+            seen.add(lb)
+            plan.append(lb)
+
+    items: list[dict] = []
+    for lb in plan:
+        print(f"listing shorts from {channel} (lookback={lb})", flush=True)
+        items = list_shorts(channel, lb, cookies_from_browser=cookies_from_browser)
+        nxt = pick_next_for(items, state, platforms)
+        if nxt:
+            if lb != lookback:
+                print(
+                    f"lookback expanded to {lb} to find unused short for {platforms}",
+                    flush=True,
+                )
+            return items, nxt
+        print(
+            f"lookback={lb} 无可用短视频（需平台 {platforms}），尝试扩大回看",
+            flush=True,
+        )
+    return items, None
 
 
 def _probe_video(path: Path) -> dict:
@@ -702,8 +750,29 @@ def cleanup_previous_day_xhs_stages(stage_dir: Path, today: date) -> int:
     """Delete iCloud staged folders from before today (previous day's 2 videos, etc.)."""
     if not stage_dir.exists():
         return 0
+    entries: list[Path] = []
+    # iCloud Drive listdir can raise InterruptedError (EINTR); retry a few times.
+    last_err: Exception | None = None
+    for _ in range(5):
+        try:
+            entries = list(stage_dir.iterdir())
+            last_err = None
+            break
+        except InterruptedError as exc:
+            last_err = exc
+            time.sleep(0.4)
+        except OSError as exc:
+            # Transient cloud-file hiccups.
+            if getattr(exc, "errno", None) in (4, 35):  # EINTR, EAGAIN
+                last_err = exc
+                time.sleep(0.4)
+                continue
+            raise
+    if last_err is not None and not entries:
+        raise RuntimeError(f"无法读取 iCloud 待发目录 {stage_dir}: {last_err}") from last_err
+
     deleted = 0
-    for path in sorted(stage_dir.iterdir()):
+    for path in sorted(entries):
         if not path.is_dir():
             continue
         folder_day = _folder_stage_date(path.name)
@@ -723,7 +792,7 @@ def main() -> int:
     parser.add_argument("--channel", default=DEFAULT_CHANNEL)
     parser.add_argument("--account", default=DEFAULT_ACCOUNT)
     parser.add_argument("--daily-limit", type=int, default=1)
-    parser.add_argument("--lookback", type=int, default=50)
+    parser.add_argument("--lookback", type=int, default=DEFAULT_LOOKBACK)
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE)
     parser.add_argument("--inbox", type=Path, default=DEFAULT_INBOX)
     parser.add_argument("--copy-library", type=Path, default=DEFAULT_COPY_LIBRARY)
@@ -773,7 +842,13 @@ def main() -> int:
         return 3
 
     print(f"listing shorts from {args.channel} (lookback={args.lookback})", flush=True)
-    items = list_shorts(args.channel, args.lookback, cookies_from_browser=cookies_from_browser)
+    items, _probe = list_shorts_until_pick(
+        args.channel,
+        state,
+        FOOD_PLATFORMS,
+        lookback=args.lookback,
+        cookies_from_browser=cookies_from_browser,
+    )
     if not items:
         print("未获取到 Shorts 列表", file=sys.stderr)
         return 4
@@ -788,9 +863,17 @@ def main() -> int:
             )
             return 7
 
-        nxt = pick_next(items, state)
+        nxt = pick_next_for(items, state, FOOD_PLATFORMS)
         if not nxt:
-            msg = "lookback 范围内没有未使用的新视频（快手+B站），本次未上传"
+            items, nxt = list_shorts_until_pick(
+                args.channel,
+                state,
+                FOOD_PLATFORMS,
+                lookback=args.lookback,
+                cookies_from_browser=cookies_from_browser,
+            )
+        if not nxt:
+            msg = "扩大回看后仍没有可发的新视频（快手+B站），本次未上传"
             print(msg, file=sys.stderr)
             if processed == 0:
                 return 6

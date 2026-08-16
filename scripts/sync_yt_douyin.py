@@ -27,7 +27,7 @@ def main() -> int:
     parser.add_argument("--channel", default=food.DEFAULT_CHANNEL)
     parser.add_argument("--account", default=food.DEFAULT_ACCOUNT)
     parser.add_argument("--daily-limit", type=int, default=1)
-    parser.add_argument("--lookback", type=int, default=50)
+    parser.add_argument("--lookback", type=int, default=food.DEFAULT_LOOKBACK)
     parser.add_argument("--state", type=Path, default=food.DEFAULT_STATE)
     parser.add_argument("--inbox", type=Path, default=food.DEFAULT_INBOX)
     parser.add_argument("--copy-library", type=Path, default=food.DEFAULT_COPY_LIBRARY)
@@ -55,7 +55,13 @@ def main() -> int:
         return 3
 
     print(f"listing shorts from {args.channel} (lookback={args.lookback})", flush=True)
-    items = food.list_shorts(args.channel, args.lookback, cookies_from_browser=cookies_from_browser)
+    items, _probe = food.list_shorts_until_pick(
+        args.channel,
+        state,
+        ("douyin",),
+        lookback=args.lookback,
+        cookies_from_browser=cookies_from_browser,
+    )
     if not items:
         print("未获取到 Shorts 列表", file=sys.stderr)
         return 4
@@ -70,9 +76,17 @@ def main() -> int:
             )
             return 7
 
-        nxt = food.pick_next(items, state)
+        nxt = food.pick_next_for(items, state, ("douyin",))
         if not nxt:
-            msg = "lookback 范围内没有未使用的新视频（抖音），本次未上传"
+            items, nxt = food.list_shorts_until_pick(
+                args.channel,
+                state,
+                ("douyin",),
+                lookback=args.lookback,
+                cookies_from_browser=cookies_from_browser,
+            )
+        if not nxt:
+            msg = "扩大回看后仍没有可发的新视频（抖音），本次未上传"
             print(msg, file=sys.stderr)
             if processed == 0:
                 return 6

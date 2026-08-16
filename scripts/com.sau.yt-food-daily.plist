@@ -28,6 +28,8 @@
     <string>boss rabbit</string>
     <string>--daily-limit</string>
     <string>1</string>
+    <string>--lookback</string>
+    <string>150</string>
     <string>--cookies-from-browser</string>
     <string>edge</string>
   </array>

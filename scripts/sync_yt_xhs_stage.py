@@ -30,7 +30,7 @@ SCHEDULE_START_DATE = date(2026, 8, 14)
 def main() -> int:
     parser = argparse.ArgumentParser(description="Stage YouTube Shorts to iCloud for manual Xiaohongshu")
     parser.add_argument("--channel", default=food.DEFAULT_CHANNEL)
-    parser.add_argument("--lookback", type=int, default=50)
+    parser.add_argument("--lookback", type=int, default=food.DEFAULT_LOOKBACK)
     parser.add_argument("--daily-limit", type=int, default=1)
     parser.add_argument("--state", type=Path, default=food.DEFAULT_STATE)
     parser.add_argument("--inbox", type=Path, default=food.DEFAULT_INBOX)
@@ -64,7 +64,13 @@ def main() -> int:
         food.cleanup_previous_day_xhs_stages(args.xhs_stage_dir, today)
 
     print(f"listing shorts from {args.channel} (lookback={args.lookback})", flush=True)
-    items = food.list_shorts(args.channel, args.lookback, cookies_from_browser=cookies_from_browser)
+    items, _probe = food.list_shorts_until_pick(
+        args.channel,
+        state,
+        ("xhs_staged",),
+        lookback=args.lookback,
+        cookies_from_browser=cookies_from_browser,
+    )
     if not items:
         print("未获取到 Shorts 列表", file=sys.stderr)
         return 4
@@ -79,9 +85,17 @@ def main() -> int:
             )
             return 7
 
-        nxt = food.pick_next(items, state)
+        nxt = food.pick_next_for(items, state, ("xhs_staged",))
         if not nxt:
-            msg = "lookback 范围内没有未使用的新视频（小红书云盘待发），本次未下载"
+            items, nxt = food.list_shorts_until_pick(
+                args.channel,
+                state,
+                ("xhs_staged",),
+                lookback=args.lookback,
+                cookies_from_browser=cookies_from_browser,
+            )
+        if not nxt:
+            msg = "扩大回看后仍没有可发的新视频（小红书云盘待发），本次未下载"
             print(msg, file=sys.stderr)
             if processed == 0:
                 return 6
