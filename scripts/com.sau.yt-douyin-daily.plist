@@ -1,12 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  北京时间每天 10:00、17:00 和 22:30：@kochiasmr Shorts -> 抖音（每次 1 条，一天 3 条）
-  与快手+B站任务分开调度；同源同文案库，共用去重状态。
-
-  安装:
+  抖音定时已停用（2026-08-18）。不要再 bootstrap 这个 plist。
+  如需恢复:
     cp scripts/com.sau.yt-douyin-daily.plist ~/Library/LaunchAgents/
-    launchctl bootout gui/$(id -u)/com.sau.yt-douyin-daily 2>/dev/null
     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sau.yt-douyin-daily.plist
 -->
 <plist version="1.0">
