@@ -54,5 +54,8 @@ class BilibiliCliTests(unittest.TestCase):
             request = sau_cli.BilibiliVideoUploadRequest("creator", Path("demo.mp4"), "hello", "hello", 249, ["test"], 0, Path("cover.png"))
             with patch("sau_cli.resolve_account_file", return_value=account_file), patch("sau_cli.run_biliup_command", return_value=SimpleNamespace(returncode=0, stdout="", stderr="")) as run_biliup:
                 asyncio.run(sau_cli.upload_bilibili_video(request))
-        self.assertIn("--cover", run_biliup.call_args.args[0])
-        self.assertIn("cover.png", run_biliup.call_args.args[0])
+        args = run_biliup.call_args.args[0]
+        self.assertIn("--cover", args)
+        self.assertIn("cover.png", args)
+        self.assertIn("--line", args)
+        self.assertIn(sau_cli.DEFAULT_BILIBILI_UPLOAD_LINE, args)

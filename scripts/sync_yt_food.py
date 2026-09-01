@@ -7,6 +7,8 @@ Rules:
 - Prefer H.264 1080p download (Douyin-friendly codecs also fine for KS/Bili)
 - After download, verify H.264 clarity; if soft, pin best format and re-download once
 - If still soft, skip to next short (max 5 tries / run), then stop the job
+- If YouTube download fails, skip to next short (same try budget); do not crash the job
+- Prefer finishing partial shorts (e.g. KS done / Bili pending) before brand-new ones
 - Each job only skips shorts already done for ITS platforms (KS+Bili / Douyin / XHS
   independently). quality_rejected is still global. Lookback auto-expands if empty.
 - Each run must publish a brand-new short
@@ -66,6 +68,10 @@ class QualityRejected(RuntimeError):
     """Downloaded file still below required clarity after pin-retry."""
 
 
+class DownloadFailed(RuntimeError):
+    """yt-dlp failed to fetch this short (transient or extractor issue)."""
+
+
 # Portrait Shorts: 1080p means width=1080 (height~1920). Filtering height=1080 wrongly picks 480p.
 DEFAULT_YT_FORMAT = (
     "bv*[vcodec^=avc1][width=1080]+ba[ext=m4a]/"
@@ -75,6 +81,8 @@ DEFAULT_YT_FORMAT = (
     "b[ext=mp4]/"
     "bv*+ba/b"
 )
+# cookies + default tv_downgraded client often hits "The page needs to be reloaded".
+DEFAULT_YT_EXTRACTOR_ARGS = "youtube:player_client=default,web_embedded"
 DEFAULT_XHS_STAGE_DIR = (
     Path.home() / "Library/Mobile Documents/com~apple~CloudDocs/sau-xhs-待发"
 )
@@ -243,7 +251,12 @@ def _run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
 def _yt_dlp_cookie_args(cookies_from_browser: str | None) -> list[str]:
     if not cookies_from_browser:
         return []
-    return ["--cookies-from-browser", cookies_from_browser]
+    return [
+        "--cookies-from-browser",
+        cookies_from_browser,
+        "--extractor-args",
+        DEFAULT_YT_EXTRACTOR_ARGS,
+    ]
 
 
 def list_shorts(channel: str, lookback: int, cookies_from_browser: str | None = None) -> list[dict]:
@@ -290,16 +303,29 @@ def pick_next_for(
 ) -> dict | None:
     """Newest short that still needs at least one of `platforms`.
 
+    Prefer partial progress (some platforms done) over brand-new shorts so a
+    failed Bilibili upload is retried before we burn the daily slot on a new one.
     quality_rejected is always skipped. Other jobs' platform marks do not block.
     """
     records = state.setdefault("items", {})
+    partial: dict | None = None
+    fresh: dict | None = None
     for item in items:
         entry = records.get(item["id"])
         if entry and entry.get("quality_rejected"):
             continue
-        if not entry or any(not entry.get(p) for p in platforms):
-            return item
-    return None
+        needs = not entry or any(not entry.get(p) for p in platforms)
+        if not needs:
+            continue
+        has_any = bool(entry) and any(bool(entry.get(p)) for p in platforms)
+        if has_any:
+            if partial is None:
+                partial = item
+        elif fresh is None:
+            fresh = item
+        if partial is not None and fresh is not None:
+            break
+    return partial or fresh
 
 
 def pick_next(items: list[dict], state: dict) -> dict | None:
@@ -494,6 +520,13 @@ def mark_quality_rejected(
     )
 
 
+def find_local_video(inbox: Path, video_id: str) -> Path | None:
+    videos = sorted(
+        inbox.glob(f"*{video_id}*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
+    return videos[0] if videos else None
+
+
 def _download_with_format(
     url: str,
     video_id: str,
@@ -507,24 +540,27 @@ def _download_with_format(
 
     yt_dlp = shutil.which("yt-dlp") or "yt-dlp"
     out_tmpl = str(inbox / f"food_%(upload_date)s_%(id)s_%(title).80B.%(ext)s")
-    _run(
-        [
-            yt_dlp,
-            "--no-update",
-            *_yt_dlp_cookie_args(cookies_from_browser),
-            "-f",
-            format_selector,
-            "--merge-output-format",
-            "mp4",
-            "-o",
-            out_tmpl,
-            "--write-info-json",
-            url,
-        ]
-    )
+    try:
+        _run(
+            [
+                yt_dlp,
+                "--no-update",
+                *_yt_dlp_cookie_args(cookies_from_browser),
+                "-f",
+                format_selector,
+                "--merge-output-format",
+                "mp4",
+                "-o",
+                out_tmpl,
+                "--write-info-json",
+                url,
+            ]
+        )
+    except subprocess.CalledProcessError as exc:
+        raise DownloadFailed(f"yt-dlp failed for {video_id} (exit {exc.returncode})") from exc
     videos = sorted(inbox.glob(f"*{video_id}*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not videos:
-        raise RuntimeError(f"下载完成但未找到 mp4: {video_id}")
+        raise DownloadFailed(f"下载完成但未找到 mp4: {video_id}")
     return videos[0]
 
 
@@ -858,7 +894,7 @@ def main() -> int:
     while processed < args.daily_limit:
         if quality_tries >= DEFAULT_MAX_QUALITY_TRIES:
             print(
-                f"已试 {DEFAULT_MAX_QUALITY_TRIES} 个视频清晰度都不达标，本次发布任务停止",
+                f"已试 {DEFAULT_MAX_QUALITY_TRIES} 个候选视频仍无法完成下载/清晰度校验，本次发布任务停止",
                 file=sys.stderr,
             )
             return 7
@@ -926,10 +962,20 @@ def main() -> int:
             flush=True,
         )
 
+        local_video = find_local_video(args.inbox, video_id)
         try:
-            video_path, source_title = download_highest(
-                nxt["url"], video_id, args.inbox, cookies_from_browser=cookies_from_browser
-            )
+            if local_video and (
+                entry.get("downloaded")
+                or entry.get("kuaishou")
+                or entry.get("bilibili")
+            ):
+                video_path = local_video
+                source_title = entry.get("source_title") or nxt["title"]
+                print(f"reuse local video: {video_path}", flush=True)
+            else:
+                video_path, source_title = download_highest(
+                    nxt["url"], video_id, args.inbox, cookies_from_browser=cookies_from_browser
+                )
         except QualityRejected as exc:
             mark_quality_rejected(
                 state,
@@ -939,6 +985,9 @@ def main() -> int:
                 reason=str(exc),
                 state_path=args.state,
             )
+            continue
+        except DownloadFailed as exc:
+            print(f"download failed, try next: {video_id} | {exc}", file=sys.stderr, flush=True)
             continue
 
         entry["source_title"] = source_title

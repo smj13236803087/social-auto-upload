@@ -80,7 +80,7 @@ def main() -> int:
     while processed < args.daily_limit:
         if quality_tries >= food.DEFAULT_MAX_QUALITY_TRIES:
             print(
-                f"已试 {food.DEFAULT_MAX_QUALITY_TRIES} 个视频清晰度都不达标，本次发布任务停止",
+                f"已试 {food.DEFAULT_MAX_QUALITY_TRIES} 个候选视频仍无法完成下载/清晰度校验，本次发布任务停止",
                 file=sys.stderr,
             )
             return 7
@@ -140,10 +140,16 @@ def main() -> int:
             flush=True,
         )
 
+        local_video = food.find_local_video(args.inbox, video_id)
         try:
-            video_path, source_title = food.download_highest(
-                nxt["url"], video_id, args.inbox, cookies_from_browser=cookies_from_browser
-            )
+            if local_video and (entry.get("downloaded") or entry.get("xhs_staged")):
+                video_path = local_video
+                source_title = entry.get("source_title") or nxt["title"]
+                print(f"reuse local video: {video_path}", flush=True)
+            else:
+                video_path, source_title = food.download_highest(
+                    nxt["url"], video_id, args.inbox, cookies_from_browser=cookies_from_browser
+                )
         except food.QualityRejected as exc:
             food.mark_quality_rejected(
                 state,
@@ -153,6 +159,9 @@ def main() -> int:
                 reason=str(exc),
                 state_path=args.state,
             )
+            continue
+        except food.DownloadFailed as exc:
+            print(f"download failed, try next: {video_id} | {exc}", file=sys.stderr, flush=True)
             continue
 
         entry["source_title"] = source_title

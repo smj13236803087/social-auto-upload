@@ -137,6 +137,11 @@ class XiaohongshuNoteUploadRequest:
     headless: bool = True
 
 
+# Default upload CDN line. bldsa/cnbldsa (*.bilivideo.com upcdnbldsa) cert expired
+# 2026-07-11; bda2 still has a valid cert on this machine.
+DEFAULT_BILIBILI_UPLOAD_LINE = "bda2"
+
+
 @dataclass(slots=True)
 class BilibiliVideoUploadRequest:
     account_name: str
@@ -147,6 +152,7 @@ class BilibiliVideoUploadRequest:
     tags: list[str]
     publish_date: datetime | int
     thumbnail_file: Path | None = None
+    line: str = DEFAULT_BILIBILI_UPLOAD_LINE
 
 
 @dataclass(slots=True)
@@ -502,6 +508,9 @@ async def upload_bilibili_video(request: BilibiliVideoUploadRequest) -> Path:
         "--tid",
         str(request.tid),
     ]
+    line = (request.line or DEFAULT_BILIBILI_UPLOAD_LINE).strip()
+    if line:
+        arguments.extend(["--line", line])
     if request.tags:
         arguments.extend(["--tag", ",".join(request.tags)])
     if request.thumbnail_file:
@@ -691,6 +700,11 @@ def build_parser() -> argparse.ArgumentParser:
     bilibili_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags, such as tag1,tag2")
     bilibili_upload_video_parser.add_argument("--thumbnail", type=existing_file_path, help="Optional Bilibili cover image path")
     bilibili_upload_video_parser.add_argument("--schedule", type=schedule_value, help=f"Schedule time in {schedule_help}")
+    bilibili_upload_video_parser.add_argument(
+        "--line",
+        default=DEFAULT_BILIBILI_UPLOAD_LINE,
+        help=f"biliup upload CDN line (default: {DEFAULT_BILIBILI_UPLOAD_LINE})",
+    )
 
     tencent_parser = platform_parsers.add_parser("tencent", help="Tencent/WeChat Channels operations")
     tencent_actions = tencent_parser.add_subparsers(dest="action", required=True)
@@ -938,6 +952,7 @@ async def dispatch(args: argparse.Namespace) -> int:
                 tags=parse_tags(args.tags),
                 publish_date=args.schedule or 0,
                 thumbnail_file=args.thumbnail,
+                line=args.line,
             )
             await upload_bilibili_video(request)
             print(f"Bilibili video upload submitted: {request.video_file}")
