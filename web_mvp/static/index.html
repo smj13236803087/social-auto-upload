@@ -1,0 +1,1358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AutoSelf · 抖音 / 快手 / B站 / 微信视频号</title>
+  <style>
+    :root {
+      --stage: #1e6fe8;
+      --stage-2: #1557c7;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --line: #e5eaf0;
+      --soft: #f5f8fc;
+      --accent: #2f7cf6;
+      --accent-2: #1a5fd4;
+      --ok: #16a34a;
+      --bad: #ef4444;
+      --orange: #f59e0b;
+      --orange-2: #ea580c;
+      --pink: #fb7185;
+      --pink-2: #e11d48;
+      --green: #22c55e;
+      --green-2: #16a34a;
+      --sky: #38bdf8;
+      --sky-2: #0ea5e9;
+      --warn-bg: #fff8e7;
+      --warn-border: #f6d889;
+      --radius: 22px;
+      --radius-sm: 14px;
+      --shadow: 0 10px 28px rgba(15, 55, 130, 0.14);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+      background:
+        radial-gradient(900px 420px at 12% -8%, #4d97ff 0%, transparent 55%),
+        radial-gradient(700px 380px at 100% 0%, #2a7af0 0%, transparent 50%),
+        linear-gradient(160deg, var(--stage) 0%, var(--stage-2) 100%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .app-shell {
+      max-width: 1120px;
+      margin: 18px auto 36px;
+      padding: 0 16px;
+    }
+    header.app-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px 16px;
+      padding: 14px 18px;
+      margin-bottom: 14px;
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.18);
+      border: 1px solid rgba(255, 255, 255, 0.28);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 8px 24px rgba(10, 50, 120, 0.18);
+      color: #fff;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      border-radius: 14px;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      color: var(--stage-2);
+      background: linear-gradient(145deg, #fff 0%, #e8f2ff 100%);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+      flex: 0 0 auto;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 1.35rem;
+      letter-spacing: 0.01em;
+      color: #fff;
+    }
+    header .tagline {
+      margin: 2px 0 0;
+      color: rgba(255, 255, 255, 0.86);
+      font-size: 0.86rem;
+    }
+    .header-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    main {
+      display: grid;
+      gap: 14px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid rgba(255, 255, 255, 0.65);
+      border-radius: var(--radius);
+      padding: 18px 18px 16px;
+      box-shadow: var(--shadow);
+    }
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 1.08rem;
+      color: #111827;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .card h2::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--sky), var(--accent));
+      box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.2);
+    }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 10px;
+      align-items: center;
+    }
+    label { color: var(--muted); font-size: 0.9rem; min-width: 4.5em; }
+    input, select, textarea, button {
+      font: inherit;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line);
+      background: var(--soft);
+      color: var(--text);
+      padding: 9px 12px;
+    }
+    input, select, textarea {
+      flex: 1;
+      min-width: 160px;
+      background: #fff;
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: #93c5fd;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+    }
+    textarea { width: 100%; min-height: 72px; resize: vertical; }
+    button {
+      border: none;
+      color: #fff;
+      cursor: pointer;
+      font-weight: 700;
+      background: linear-gradient(180deg, #4d94ff 0%, var(--accent-2) 100%);
+      box-shadow: 0 6px 14px rgba(26, 95, 212, 0.28);
+      transition: transform 0.12s ease, filter 0.12s ease;
+    }
+    button:hover { filter: brightness(1.05); }
+    button:active { transform: translateY(1px); }
+    button.secondary {
+      background: linear-gradient(180deg, #67e8f9 0%, var(--sky-2) 100%);
+      box-shadow: 0 6px 14px rgba(14, 165, 233, 0.25);
+    }
+    button.danger {
+      background: linear-gradient(180deg, var(--pink) 0%, var(--pink-2) 100%);
+      box-shadow: 0 6px 14px rgba(225, 29, 72, 0.25);
+    }
+    button:disabled { opacity: 0.55; cursor: not-allowed; filter: none; transform: none; }
+    #btnLogin,
+    #btnAddSub,
+    #btnAddFq {
+      background: linear-gradient(180deg, #fdba74 0%, var(--orange-2) 100%);
+      box-shadow: 0 6px 14px rgba(234, 88, 12, 0.28);
+    }
+    #btnDownload {
+      background: linear-gradient(180deg, #4ade80 0%, var(--green-2) 100%);
+      box-shadow: 0 6px 14px rgba(22, 163, 74, 0.28);
+    }
+    #btnDownloadUpload,
+    #btnLocalPublish {
+      background: linear-gradient(180deg, #60a5fa 0%, var(--accent-2) 100%);
+    }
+    #btnCheckAll {
+      background: linear-gradient(180deg, #fb7185 0%, #e11d48 100%);
+      box-shadow: 0 6px 14px rgba(225, 29, 72, 0.22);
+    }
+    .target-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      flex: 1;
+      min-width: 200px;
+    }
+    .target-list label.target-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      color: var(--text);
+      font-size: 0.92rem;
+      cursor: pointer;
+      user-select: none;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: var(--soft);
+      border: 1px solid var(--line);
+    }
+    .target-list input { flex: none; min-width: 0; accent-color: var(--accent); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+      background: #fff;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+      word-break: break-all;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      background: var(--soft);
+    }
+    tr:last-child td { border-bottom: none; }
+    .muted { color: var(--muted); }
+    .ok { color: var(--ok); font-weight: 700; }
+    .bad { color: var(--bad); font-weight: 700; }
+    #qrcodeBox {
+      margin: 8px 0 12px;
+      padding: 12px;
+      border-radius: var(--radius-sm);
+      background: var(--warn-bg);
+      border: 1px solid var(--warn-border);
+      color: #92400e;
+    }
+    #qrcodeBox img {
+      max-width: 220px;
+      border-radius: 12px;
+      background: white;
+      padding: 8px;
+    }
+    .log {
+      white-space: pre-wrap;
+      background: var(--soft);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      padding: 12px;
+      min-height: 48px;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+    #fqList > div {
+      border: 1px solid var(--line) !important;
+      border-radius: 16px !important;
+      background: var(--soft);
+      padding: 12px !important;
+      margin-bottom: 10px;
+    }
+    .auth-gate {
+      max-width: 420px;
+      margin: 72px auto;
+      padding: 0 16px;
+    }
+    .auth-card h2 { margin-bottom: 6px; }
+    .auth-card .auth-tabs {
+      display: flex;
+      gap: 8px;
+      margin: 12px 0 16px;
+    }
+    .auth-card .auth-tabs button {
+      flex: 1;
+      background: #e8eef8;
+      color: var(--text);
+      box-shadow: none;
+    }
+    .auth-card .auth-tabs button.active {
+      background: linear-gradient(180deg, #4d94ff 0%, var(--accent-2) 100%);
+      color: #fff;
+      box-shadow: 0 6px 14px rgba(26, 95, 212, 0.28);
+    }
+    .user-chip {
+      align-self: center;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.2);
+      color: #fff;
+      font-size: 0.86rem;
+      font-weight: 600;
+    }
+    @media (max-width: 720px) {
+      header.app-bar { border-radius: 18px; }
+      .card { border-radius: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="authGate" class="auth-gate" style="display:none">
+    <section class="card auth-card">
+      <h2>登录 AutoSelf</h2>
+      <p class="muted" style="margin:0">邮箱注册需验证码。初期免费。</p>
+      <div class="auth-tabs">
+        <button type="button" class="active" id="tabLogin">登录</button>
+        <button type="button" id="tabRegister">注册</button>
+      </div>
+      <div class="row">
+        <label>邮箱</label>
+        <input id="authEmail" type="email" placeholder="name@example.com" autocomplete="email" />
+      </div>
+      <div class="row" id="authUsernameRow" style="display:none">
+        <label>昵称</label>
+        <input id="authUsername" placeholder="可选，默认取邮箱前缀" autocomplete="nickname" />
+      </div>
+      <div class="row">
+        <label>密码</label>
+        <input id="authPassword" type="password" placeholder="至少 6 位" autocomplete="current-password" />
+      </div>
+      <div class="row" id="authCodeRow" style="display:none">
+        <label>验证码</label>
+        <input id="authCode" placeholder="6 位数字" maxlength="6" style="flex:1;min-width:120px" />
+        <button type="button" class="secondary" id="btnSendCode" style="flex:0 0 auto">获取验证码</button>
+      </div>
+      <div class="row">
+        <button type="button" id="btnAuthSubmit">登录</button>
+      </div>
+      <div id="authLog" class="log"></div>
+    </section>
+  </div>
+
+  <div class="app-shell" id="appMain" style="display:none">
+  <header class="app-bar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">AS</div>
+      <div>
+        <h1>AutoSelf</h1>
+        <p class="tagline">抖音 / 快手 / B站 / 微信视频号 · 绑账号 · 贴链接 · 日更助手</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <span class="user-chip" id="userChip">未登录</span>
+      <button type="button" class="secondary" id="btnHeaderRefresh" title="刷新账号">刷新账号</button>
+      <button type="button" id="btnHeaderCheck" title="校验 Cookie">校验 Cookie</button>
+      <button type="button" class="danger" id="btnLogout" title="退出登录">退出</button>
+    </div>
+  </header>
+  <main>
+    <section class="card">
+      <h2>1. 账号</h2>
+      <p class="muted" style="margin:0 0 10px">选择平台后直接扫码绑定；列表显示平台真实昵称。Cookie 失效时点「重新登录」即可。</p>
+      <div class="row">
+        <label>平台</label>
+        <select id="loginPlatform">
+          <option value="douyin">抖音</option>
+          <option value="kuaishou">快手</option>
+          <option value="bilibili">B站</option>
+          <option value="tencent">微信视频号</option>
+        </select>
+        <button id="btnLogin">扫码登录</button>
+        <button class="secondary" id="btnRefresh">刷新列表</button>
+        <button class="secondary" id="btnCheckAll">校验 Cookie</button>
+      </div>
+      <div id="qrcodeBox" class="muted">登录二维码会显示在这里（抖音 / 快手 / B站 / 微信视频号均可扫码）</div>
+      <table>
+        <thead>
+          <tr><th>平台</th><th>平台账号</th><th>状态</th><th></th></tr>
+        </thead>
+        <tbody id="accountBody">
+          <tr><td colspan="4" class="muted">加载中…</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>2. 本地视频发布</h2>
+      <p class="muted" style="margin:0 0 10px">
+        选择本机视频，填写标题、文案与话题标签，勾选已绑定账号后一键发布。
+        标签可用空格或逗号分隔，带不带 <code>#</code> 均可。
+      </p>
+      <div class="row">
+        <label>视频文件</label>
+        <input id="localVideo" type="file" accept="video/*,.mp4,.mov,.mkv,.avi" />
+      </div>
+      <div class="row">
+        <label>标题</label>
+        <input id="localTitle" placeholder="必填" />
+      </div>
+      <div class="row">
+        <label>文案</label>
+        <textarea id="localDesc" placeholder="可选；不填则用标题" style="min-height:56px"></textarea>
+      </div>
+      <div class="row">
+        <label>标签</label>
+        <input id="localTags" placeholder="例如：旅行 美食 #日常" />
+      </div>
+      <div class="row" style="align-items:flex-start">
+        <label style="padding-top:6px">发布到</label>
+        <div id="localTargets" class="target-list muted">请先绑定账号</div>
+      </div>
+      <div class="row" id="localTidRow" style="display:none">
+        <label>B站分区</label>
+        <select id="localTid" style="min-width:220px"></select>
+      </div>
+      <div class="row">
+        <button id="btnLocalPublish">上传并发布</button>
+      </div>
+      <div id="localLog" class="log"></div>
+    </section>
+
+    <section class="card">
+      <h2>3. 贴链接下载 / 上传</h2>
+      <p class="muted" style="margin:0 0 10px">抖音下载会自动使用已绑定账号的 Cookie；若失败请先重新扫码登录抖音。</p>
+      <div class="row">
+        <label>分享内容</label>
+        <textarea id="shareText" placeholder="粘贴抖音 / 快手 / B站分享文案或链接"></textarea>
+      </div>
+      <div class="row">
+        <label>自定义标题</label>
+        <input id="dlUpTitle" placeholder="可选；不填则用原视频标题" />
+      </div>
+      <div class="row">
+        <label>自定义文案</label>
+        <textarea id="dlUpDesc" placeholder="可选；不填则用原视频文案/标题" style="min-height:56px"></textarea>
+      </div>
+      <div class="row">
+        <button id="btnDownload">解析并下载</button>
+        <button id="btnDownloadUpload">解析下载并上传到</button>
+      </div>
+      <div class="row" style="align-items:flex-start">
+        <label style="padding-top:6px">上传目标</label>
+        <div id="dlTargets" class="target-list muted">请先绑定账号</div>
+      </div>
+      <div class="row" id="dlTidRow" style="display:none">
+        <label>B站分区</label>
+        <select id="dlUpTid" style="min-width:220px"></select>
+      </div>
+      <div id="dlLog" class="log"></div>
+    </section>
+
+    <section class="card">
+      <h2>4. 博主日更订阅</h2>
+      <p class="muted" style="margin:0 0 10px">
+        填写博主主页链接与每天执行时间；添加时会校验链接能否拉取到作品。
+        到点后自动拉取该博主最新视频，若有更新则下载并上传到指定平台。
+        服务需保持运行。可用「立即执行」先测一次。<strong>最多 2 条订阅</strong>；每条可勾选多个上传账号。
+      </p>
+      <div class="row">
+        <label>主页链接</label>
+        <input id="subHomepage" placeholder="必填：抖音/快手/B站博主主页 URL" />
+      </div>
+      <div class="row">
+        <label>每天</label>
+        <input id="subTime" type="time" value="09:00" style="flex:0 0 auto; min-width:140px" />
+        <button id="btnAddSub">添加订阅</button>
+      </div>
+      <div class="row" style="align-items:flex-start">
+        <label style="padding-top:6px">上传目标</label>
+        <div id="subTargets" class="target-list muted">请先绑定账号</div>
+      </div>
+      <div class="row" id="subTidRow" style="display:none">
+        <label>B站分区</label>
+        <select id="subTid" style="min-width:220px"></select>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>主页</th>
+            <th>时间</th>
+            <th>上传到</th>
+            <th>状态</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="subBody">
+          <tr><td colspan="5" class="muted">暂无订阅</td></tr>
+        </tbody>
+      </table>
+      <div id="subLog" class="log" style="margin-top:10px"></div>
+    </section>
+
+    <section class="card">
+      <h2>5. 本地文件夹日更队列</h2>
+      <p class="muted" style="margin:0 0 10px">
+        指定本地视频文件夹与每天时间；到点按<strong>文件创建时间升序</strong>取未发过的视频上传（按文件名去重）。
+        下面最多展示 5 个待发视频，可提前写好标题 / 文案 / 井号标签；留空则默认「奔赴下一场山海」。
+        <strong>最多 2 条队列</strong>；每条可勾选多个上传账号。
+      </p>
+      <div class="row">
+        <label>文件夹</label>
+        <input id="fqPath" placeholder="必填：先点「选择文件夹」" />
+        <button type="button" class="secondary" id="btnPickFq" style="flex:0 0 auto">选择文件夹</button>
+      </div>
+      <div class="row">
+        <label>每天</label>
+        <input id="fqTime" type="time" value="10:00" style="flex:0 0 auto; min-width:140px" />
+        <button id="btnAddFq">添加队列</button>
+      </div>
+      <div class="row" style="align-items:flex-start">
+        <label style="padding-top:6px">上传目标</label>
+        <div id="fqTargets" class="target-list muted">请先绑定账号</div>
+      </div>
+      <div class="row" id="fqTidRow" style="display:none">
+        <label>B站分区</label>
+        <select id="fqTid" style="min-width:220px"></select>
+      </div>
+      <div id="fqList"></div>
+      <div id="fqLog" class="log" style="margin-top:10px"></div>
+    </section>
+  </main>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let accountsCache = [];
+    let biliDefaultTid = 249;
+    let authMode = "login";
+    let currentUser = null;
+    const TOKEN_KEY = "autoself_token";
+    const PLATFORM_LABEL = { douyin: "抖音", kuaishou: "快手", bilibili: "B站", tencent: "微信视频号" };
+
+    function getToken() {
+      return localStorage.getItem(TOKEN_KEY) || "";
+    }
+    function setSession(token, user) {
+      if (token) localStorage.setItem(TOKEN_KEY, token);
+      currentUser = user || null;
+      const label = user ? (user.email || user.username) : "未登录";
+      $("userChip").textContent = user ? `已登录 · ${label}` : "未登录";
+    }
+    function clearSession() {
+      localStorage.removeItem(TOKEN_KEY);
+      currentUser = null;
+      $("userChip").textContent = "未登录";
+    }
+    function authHeaders(extra = {}) {
+      const headers = { ...(extra || {}) };
+      const token = getToken();
+      if (token) headers.Authorization = `Bearer ${token}`;
+      return headers;
+    }
+    function showAuthGate(message) {
+      $("authGate").style.display = "block";
+      $("appMain").style.display = "none";
+      if (message) $("authLog").textContent = message;
+    }
+    function showApp() {
+      $("authGate").style.display = "none";
+      $("appMain").style.display = "block";
+    }
+
+    async function api(path, options = {}) {
+      const opts = { ...options };
+      const headers = authHeaders(opts.headers || {});
+      if (opts.body != null && !headers["Content-Type"] && !headers["content-type"]) {
+        headers["Content-Type"] = "application/json";
+      }
+      opts.headers = headers;
+      const res = await fetch(path, opts);
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        clearSession();
+        showAuthGate(data.error || "请先登录");
+        throw new Error(data.error || "未登录");
+      }
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.error || data.message || res.statusText);
+      }
+      return data;
+    }
+
+    async function authRequest(path, body) {
+      const res = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.error || data.message || res.statusText);
+      }
+      return data;
+    }
+
+    let codeCooldownTimer = null;
+    function startCodeCooldown(seconds) {
+      let left = seconds;
+      const btn = $("btnSendCode");
+      btn.disabled = true;
+      btn.textContent = `${left}s 后重发`;
+      if (codeCooldownTimer) clearInterval(codeCooldownTimer);
+      codeCooldownTimer = setInterval(() => {
+        left -= 1;
+        if (left <= 0) {
+          clearInterval(codeCooldownTimer);
+          codeCooldownTimer = null;
+          btn.disabled = false;
+          btn.textContent = "获取验证码";
+          return;
+        }
+        btn.textContent = `${left}s 后重发`;
+      }, 1000);
+    }
+
+    function setAuthMode(mode) {
+      authMode = mode;
+      $("tabLogin").classList.toggle("active", mode === "login");
+      $("tabRegister").classList.toggle("active", mode === "register");
+      $("authUsernameRow").style.display = mode === "register" ? "flex" : "none";
+      $("authCodeRow").style.display = mode === "register" ? "flex" : "none";
+      $("btnAuthSubmit").textContent = mode === "login" ? "登录" : "验证并注册";
+      $("authPassword").autocomplete = mode === "login" ? "current-password" : "new-password";
+    }
+
+    $("tabLogin").onclick = () => setAuthMode("login");
+    $("tabRegister").onclick = () => setAuthMode("register");
+    $("btnSendCode").onclick = async () => {
+      const email = ($("authEmail").value || "").trim();
+      const password = $("authPassword").value || "";
+      const username = ($("authUsername").value || "").trim();
+      $("authLog").textContent = "发送验证码中…";
+      $("btnSendCode").disabled = true;
+      try {
+        await authRequest("/api/auth/register/request-code", { email, password, username });
+        $("authLog").textContent = "验证码已发送，请查收邮箱（约 10 分钟内有效）";
+        startCodeCooldown(60);
+      } catch (e) {
+        $("authLog").textContent = e.message;
+        $("btnSendCode").disabled = false;
+        $("btnSendCode").textContent = "获取验证码";
+      }
+    };
+    $("btnAuthSubmit").onclick = async () => {
+      const email = ($("authEmail").value || "").trim();
+      const password = $("authPassword").value || "";
+      $("authLog").textContent = authMode === "login" ? "登录中…" : "注册中…";
+      $("btnAuthSubmit").disabled = true;
+      try {
+        let data;
+        if (authMode === "login") {
+          data = await authRequest("/api/auth/login", { email, password });
+        } else {
+          data = await authRequest("/api/auth/register/verify", {
+            email,
+            code: ($("authCode").value || "").trim(),
+          });
+        }
+        setSession(data.token, data.user);
+        $("authLog").textContent = "成功";
+        showApp();
+        await bootApp();
+      } catch (e) {
+        $("authLog").textContent = e.message;
+      } finally {
+        $("btnAuthSubmit").disabled = false;
+      }
+    };
+    $("btnLogout").onclick = async () => {
+      try {
+        await api("/api/auth/logout", { method: "POST", body: "{}" });
+      } catch (_) {
+        /* ignore */
+      }
+      clearSession();
+      showAuthGate("已退出登录");
+    };
+
+    function fillBiliPartitionSelect(selectId, selectedTid) {
+      const sel = $(selectId);
+      if (!sel) return;
+      const keep = selectedTid != null ? Number(selectedTid) : Number(sel.value || biliDefaultTid);
+      sel.innerHTML = "";
+      (window.__biliPartitionGroups || []).forEach((group) => {
+        const og = document.createElement("optgroup");
+        og.label = group.group;
+        (group.items || []).forEach((item) => {
+          const opt = document.createElement("option");
+          opt.value = String(item.tid);
+          opt.textContent = item.label;
+          og.appendChild(opt);
+        });
+        sel.appendChild(og);
+      });
+      if (![...sel.options].some((o) => Number(o.value) === keep)) {
+        sel.value = String(biliDefaultTid);
+      } else {
+        sel.value = String(keep);
+      }
+    }
+
+    async function loadBiliPartitions() {
+      const data = await api("/api/bilibili-partitions");
+      window.__biliPartitionGroups = data.groups || [];
+      biliDefaultTid = Number(data.default_tid || 249);
+      ["dlUpTid", "subTid", "fqTid", "localTid"].forEach((id) => fillBiliPartitionSelect(id, biliDefaultTid));
+    }
+
+    function fillAllAccountSelects() {
+      renderTargetPicker("localTargets", "localTidRow");
+      renderTargetPicker("dlTargets", "dlTidRow");
+      renderTargetPicker("subTargets", "subTidRow");
+      renderTargetPicker("fqTargets", "fqTidRow");
+    }
+
+    function syncTidRow(boxId, tidRowId) {
+      const checked = [...document.querySelectorAll(`#${boxId} input[type=checkbox]:checked`)];
+      const needBili = checked.some((el) => el.dataset.platform === "bilibili");
+      if ($(tidRowId)) $(tidRowId).style.display = needBili ? "flex" : "none";
+    }
+
+    const MAX_SUBSCRIPTIONS = 2;
+    const MAX_FOLDER_QUEUES = 2;
+
+    function renderTargetPicker(boxId, tidRowId) {
+      const box = $(boxId);
+      if (!box) return;
+      const prev = new Set(
+        [...box.querySelectorAll("input[type=checkbox]:checked")].map(
+          (el) => `${el.dataset.platform}:${el.value}`
+        )
+      );
+      box.innerHTML = "";
+      if (!accountsCache.length) {
+        box.className = "target-list muted";
+        box.textContent = "请先绑定账号";
+        syncTidRow(boxId, tidRowId);
+        return;
+      }
+      box.className = "target-list";
+      accountsCache.forEach((a) => {
+        const label = document.createElement("label");
+        label.className = "target-item";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.value = a.account;
+        cb.dataset.platform = a.platform;
+        cb.checked = prev.has(`${a.platform}:${a.account}`);
+        cb.onchange = () => syncTidRow(boxId, tidRowId);
+        const name = a.display_name || a.account;
+        const nice = /^acc_/.test(name) ? "未获取到昵称" : name;
+        const span = document.createElement("span");
+        span.textContent = `${PLATFORM_LABEL[a.platform] || a.platform} · ${nice}`;
+        label.appendChild(cb);
+        label.appendChild(span);
+        box.appendChild(label);
+      });
+      syncTidRow(boxId, tidRowId);
+    }
+
+    function selectedTargets(boxId) {
+      return [...document.querySelectorAll(`#${boxId} input[type=checkbox]:checked`)]
+        .map((el) => ({
+          platform: el.dataset.platform,
+          account: el.value,
+        }));
+    }
+
+    function formatTargets(item) {
+      if (item.targets_summary) return item.targets_summary;
+      if (Array.isArray(item.targets) && item.targets.length) {
+        return item.targets
+          .map((t) => `${PLATFORM_LABEL[t.platform] || t.platform}/${t.account}`)
+          .join("、");
+      }
+      const plat = PLATFORM_LABEL[item.upload_platform] || item.upload_platform || "";
+      const acc = item.upload_account || "";
+      return plat && acc ? `${plat}/${acc}` : "-";
+    }
+
+    function newLocalAccountId() {
+      return "acc_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+    }
+
+    function startLogin(platform, account) {
+      $("qrcodeBox").textContent = "正在发起登录…";
+      const es = new EventSource(`/api/accounts/login?platform=${encodeURIComponent(platform)}&account=${encodeURIComponent(account)}&token=${encodeURIComponent(getToken())}`);
+      es.onmessage = (ev) => {
+        const data = JSON.parse(ev.data);
+        if (data.event === "qrcode") {
+          const url = data.qrcode && (data.qrcode.image_data_url || "");
+          const hint = (data.qrcode && data.qrcode.hint) || "请用对应 App 扫码：";
+          if (url) {
+            $("qrcodeBox").innerHTML = `<div>${hint}</div><img src="${url}" alt="qrcode" />`;
+          } else if (data.qrcode && data.qrcode.image_path) {
+            $("qrcodeBox").textContent = `二维码已生成：${data.qrcode.image_path}（请打开该文件扫码）`;
+          } else {
+            $("qrcodeBox").textContent = "等待二维码…若长时间无图，可改用有头浏览器登录";
+          }
+        } else if (data.event === "done") {
+          es.close();
+          const ok = data.result && data.result.success;
+          $("qrcodeBox").innerHTML = ok
+            ? `<span class="ok">登录成功</span>`
+            : `<span class="bad">登录结束：${(data.result && data.result.message) || "未知"}</span>`;
+          // 登录后立刻刷列表拿昵称；不做全量 Cookie 校验（会卡住，列表刷不出来）
+          refreshAccounts(false, true)
+            .catch((e) => {
+              $("qrcodeBox").innerHTML += `<div class="bad">列表刷新失败：${e.message || e}</div>`;
+            });
+        } else if (data.event === "error") {
+          es.close();
+          $("qrcodeBox").innerHTML = `<span class="bad">${data.message || "登录失败"}</span>`;
+        }
+      };
+      es.onerror = () => { es.close(); };
+    }
+
+    async function refreshAccounts(check = false, refreshProfile = false) {
+      const qs = [];
+      if (check) qs.push("check=1");
+      else if (refreshProfile) qs.push("refresh_profile=1");
+      const data = await api(`/api/accounts${qs.length ? `?${qs.join("&")}` : ""}`);
+      accountsCache = data.accounts || [];
+      const body = $("accountBody");
+      if (!accountsCache.length) {
+        body.innerHTML = `<tr><td colspan="4" class="muted">暂无账号，请先扫码登录</td></tr>`;
+      } else {
+        body.innerHTML = accountsCache.map((a) => {
+          let status = "已绑定";
+          let cls = "muted";
+          if (a.valid === true) { status = "有效"; cls = "ok"; }
+          if (a.valid === false) { status = "失效"; cls = "bad"; }
+          const display = a.display_name || "未获取到昵称";
+          return `<tr>
+            <td>${PLATFORM_LABEL[a.platform] || a.label || a.platform}</td>
+            <td><strong>${display}</strong></td>
+            <td class="${cls}">${status}</td>
+            <td>
+              <button class="secondary" data-relogin="${a.platform}|${a.account}">重新登录</button>
+              <button class="danger" data-del="${a.platform}|${a.account}" data-name="${encodeURIComponent(display)}">删除</button>
+            </td>
+          </tr>`;
+        }).join("");
+        body.querySelectorAll("[data-del]").forEach((btn) => {
+          btn.onclick = async () => {
+            const [platform, account] = btn.dataset.del.split("|");
+            const name = decodeURIComponent(btn.dataset.name || account);
+            if (!confirm(`删除账号「${name}」？`)) return;
+            await api(`/api/accounts?platform=${encodeURIComponent(platform)}&account=${encodeURIComponent(account)}`, { method: "DELETE" });
+            await refreshAccounts();
+          };
+        });
+        body.querySelectorAll("[data-relogin]").forEach((btn) => {
+          btn.onclick = () => {
+            const [platform, account] = btn.dataset.relogin.split("|");
+            $("loginPlatform").value = platform;
+            startLogin(platform, account);
+          };
+        });
+      }
+      fillAllAccountSelects();
+    }
+
+    async function refreshSubscriptions() {
+      const data = await api("/api/subscriptions");
+      const list = data.subscriptions || [];
+      const body = $("subBody");
+      if (!list.length) {
+        body.innerHTML = `<tr><td colspan="5" class="muted">暂无订阅</td></tr>`;
+        return;
+      }
+      body.innerHTML = list.map((s) => {
+        const enabled = s.enabled !== false;
+        const statusCls = s.last_status === "success" ? "ok" : (s.last_status === "failed" ? "bad" : "muted");
+        const statusText = [
+          enabled ? "启用" : "停用",
+          s.last_status || "-",
+          s.last_run_at || "",
+          s.last_title ? `「${s.last_title}」` : "",
+          s.last_error || "",
+        ].filter(Boolean).join(" · ");
+        return `<tr>
+          <td>
+            <div class="muted">${PLATFORM_LABEL[s.source_platform] || s.source_platform || ""}</div>
+            <div>${s.homepage_url}</div>
+          </td>
+          <td>${s.daily_time}</td>
+          <td>${formatTargets(s)}</td>
+          <td class="${statusCls}">${statusText}</td>
+          <td>
+            <button class="secondary" data-run="${s.id}">立即执行</button>
+            <button class="secondary" data-toggle="${s.id}" data-enabled="${enabled ? "0" : "1"}">${enabled ? "停用" : "启用"}</button>
+            <button class="danger" data-subdel="${s.id}">删除</button>
+          </td>
+        </tr>`;
+      }).join("");
+
+      body.querySelectorAll("[data-run]").forEach((btn) => {
+        btn.onclick = async () => {
+          const id = btn.dataset.run;
+          $("subLog").textContent = "正在执行订阅（拉最新 → 下载 → 上传）…";
+          btn.disabled = true;
+          try {
+            const res = await fetch(`/api/subscriptions/${id}/run`, {
+              method: "POST",
+              headers: authHeaders({ "Content-Type": "application/json" }),
+              body: JSON.stringify({ force: false }),
+            }).then((r) => r.json());
+            if (!res.ok) throw new Error(res.error || "执行失败");
+            $("subLog").textContent = res.skipped
+              ? `跳过：${res.message}`
+              : `成功：已上传「${res.title}」到 ${res.targets_summary || (res.upload_platform + " / " + res.upload_account)}`;
+            await refreshSubscriptions();
+          } catch (e) {
+            $("subLog").textContent = `失败：${e.message}`;
+            await refreshSubscriptions();
+          } finally {
+            btn.disabled = false;
+          }
+        };
+      });
+      body.querySelectorAll("[data-toggle]").forEach((btn) => {
+        btn.onclick = async () => {
+          await api(`/api/subscriptions/${btn.dataset.toggle}/toggle`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: btn.dataset.enabled === "1" }),
+          });
+          await refreshSubscriptions();
+        };
+      });
+      body.querySelectorAll("[data-subdel]").forEach((btn) => {
+        btn.onclick = async () => {
+          if (!confirm("删除该订阅？")) return;
+          await api(`/api/subscriptions/${btn.dataset.subdel}`, { method: "DELETE" });
+          await refreshSubscriptions();
+        };
+      });
+    }
+
+    // platform/account pickers for section 2/3/4 are checkbox target lists
+
+    $("btnRefresh").onclick = () => refreshAccounts(false).catch((e) => alert(e.message));
+    $("btnCheckAll").onclick = () => {
+      $("btnCheckAll").disabled = true;
+      refreshAccounts(true)
+        .catch((e) => alert(e.message))
+        .finally(() => { $("btnCheckAll").disabled = false; });
+    };
+    $("btnHeaderRefresh").onclick = () => $("btnRefresh").click();
+    $("btnHeaderCheck").onclick = () => $("btnCheckAll").click();
+
+    $("btnLogin").onclick = () => {
+      const platform = $("loginPlatform").value;
+      startLogin(platform, newLocalAccountId());
+    };
+
+    $("btnDownload").onclick = async () => {
+      const log = $("dlLog");
+      log.textContent = "解析下载中…";
+      $("btnDownload").disabled = true;
+      try {
+        const res = await fetch("/api/download", {
+          method: "POST",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ url: $("shareText").value }),
+        }).then((r) => r.json());
+        if (!res.ok) throw new Error(res.error || "下载失败");
+        log.textContent = `完成：${res.platform}\n标题：${res.title}\n文件：${res.filename}`;
+        const a = document.createElement("a");
+        a.href = res.download_url;
+        a.download = res.filename || "video.mp4";
+        a.textContent = "点击保存到本地";
+        log.appendChild(document.createElement("br"));
+        log.appendChild(a);
+        a.click();
+      } catch (e) {
+        log.textContent = `失败：${e.message}`;
+      } finally {
+        $("btnDownload").disabled = false;
+      }
+    };
+
+    $("btnLocalPublish").onclick = async () => {
+      const log = $("localLog");
+      const fileInput = $("localVideo");
+      const file = fileInput && fileInput.files && fileInput.files[0];
+      const title = ($("localTitle").value || "").trim();
+      const targets = selectedTargets("localTargets");
+      if (!file) {
+        log.textContent = "请先选择本地视频文件";
+        return;
+      }
+      if (!title) {
+        log.textContent = "请填写标题";
+        $("localTitle").focus();
+        return;
+      }
+      if (!targets.length) {
+        log.textContent = "请至少勾选一个发布账号";
+        return;
+      }
+      const summary = targets
+        .map((t) => `${PLATFORM_LABEL[t.platform] || t.platform}/${t.account}`)
+        .join("、");
+      log.textContent = `正在上传并发布到：${summary}\n（可能需要几分钟，请勿关闭页面）`;
+      $("btnLocalPublish").disabled = true;
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("title", title);
+        fd.append("description", ($("localDesc").value || "").trim());
+        fd.append("tags", ($("localTags").value || "").trim());
+        fd.append("tid", String(Number($("localTid").value || biliDefaultTid)));
+        fd.append("targets", JSON.stringify(targets));
+        const res = await fetch("/api/media-and-publish", {
+          method: "POST",
+          headers: authHeaders(),
+          body: fd,
+        }).then((r) => r.json());
+        if (!res.ok && !(res.results || []).some((x) => x.ok)) {
+          throw new Error(res.error || "上传或发布失败");
+        }
+        const lines = (res.results || []).map((r) => {
+          const plat = PLATFORM_LABEL[r.platform] || r.platform;
+          return r.ok
+            ? `✓ ${plat} / ${r.account}`
+            : `✗ ${plat} / ${r.account}：${r.error || "失败"}`;
+        });
+        const tagLine = (res.tags || []).length
+          ? `\n标签：${(res.tags || []).map((t) => "#" + t).join(" ")}`
+          : "";
+        log.textContent =
+          `文件：${res.filename}\n` +
+          `标题：${res.publish_title}\n` +
+          `文案：${res.publish_description || "（同标题）"}` +
+          tagLine +
+          `\n发布结果：\n${lines.join("\n") || "无"}`;
+      } catch (e) {
+        log.textContent = `失败：${e.message}`;
+      } finally {
+        $("btnLocalPublish").disabled = false;
+      }
+    };
+
+    $("btnDownloadUpload").onclick = async () => {
+      const log = $("dlLog");
+      const targets = selectedTargets("dlTargets");
+      if (!targets.length) {
+        alert("请至少勾选一个上传目标账号");
+        return;
+      }
+      const summary = targets
+        .map((t) => `${PLATFORM_LABEL[t.platform] || t.platform}/${t.account}`)
+        .join("、");
+      log.textContent = `解析下载并上传到：${summary}\n（上传可能需要几分钟，请勿关闭页面）`;
+      $("btnDownloadUpload").disabled = true;
+      $("btnDownload").disabled = true;
+      try {
+        const payload = {
+          url: $("shareText").value,
+          title: ($("dlUpTitle").value || "").trim(),
+          description: ($("dlUpDesc").value || "").trim(),
+          tid: Number($("dlUpTid").value || biliDefaultTid),
+          targets,
+        };
+        const res = await fetch("/api/download-and-publish", {
+          method: "POST",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify(payload),
+        }).then((r) => r.json());
+        if (!res.ok && !(res.results || []).some((x) => x.ok)) {
+          throw new Error(res.error || "下载或上传失败");
+        }
+        const lines = (res.results || []).map((r) => {
+          const plat = PLATFORM_LABEL[r.platform] || r.platform;
+          return r.ok
+            ? `✓ ${plat} / ${r.account}`
+            : `✗ ${plat} / ${r.account}：${r.error || "失败"}`;
+        });
+        log.textContent =
+          `下载完成：${res.source_platform}\n` +
+          `标题：${res.publish_title}\n` +
+          `文案：${res.publish_description || "（同标题）"}\n` +
+          `文件：${res.filename}\n` +
+          `上传结果：\n${lines.join("\n") || "无"}`;
+        const a = document.createElement("a");
+        a.href = res.download_url;
+        a.download = res.filename || "video.mp4";
+        a.textContent = "也可点击保存到本地";
+        log.appendChild(document.createElement("br"));
+        log.appendChild(a);
+      } catch (e) {
+        log.textContent = `失败：${e.message}`;
+      } finally {
+        $("btnDownloadUpload").disabled = false;
+        $("btnDownload").disabled = false;
+      }
+    };
+
+    $("btnAddSub").onclick = async () => {
+      const homepage = ($("subHomepage").value || "").trim();
+      if (!homepage) {
+        $("subLog").textContent = "请先填写博主主页链接";
+        $("subHomepage").focus();
+        return;
+      }
+      $("btnAddSub").disabled = true;
+      $("subLog").textContent = "正在校验主页链接能否获取作品，请稍候…";
+      try {
+        const targets = selectedTargets("subTargets");
+        if (!targets.length) throw new Error("请至少勾选一个上传目标账号");
+        const res = await api("/api/subscriptions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            homepage_url: homepage,
+            daily_time: $("subTime").value,
+            targets,
+            tid: Number($("subTid").value || biliDefaultTid),
+          }),
+        });
+        $("subHomepage").value = "";
+        const probe = (res.subscription && res.subscription.probe_title) || "";
+        $("subLog").textContent = probe
+          ? `已添加订阅（已校验可获取作品：${probe}）。请保持本服务运行，到点会自动执行。`
+          : "已添加订阅（主页已校验通过）。请保持本服务运行，到点会自动执行。";
+        await refreshSubscriptions();
+      } catch (e) {
+        $("subLog").textContent = `失败：${e.message}`;
+      } finally {
+        $("btnAddSub").disabled = false;
+      }
+    };
+
+    async function refreshFolderQueues() {
+      const data = await api("/api/folder-queues");
+      const list = data.queues || [];
+      const defaultCopy = data.default_copy || "奔赴下一场山海";
+      const box = $("fqList");
+      if (!list.length) {
+        box.innerHTML = `<p class="muted">暂无本地文件夹队列</p>`;
+        return;
+      }
+      box.innerHTML = list.map((q) => {
+        const enabled = q.enabled !== false;
+        const statusCls = q.last_status === "success" ? "ok" : (q.last_status === "failed" ? "bad" : "muted");
+        const next = q.next_video;
+        const upcoming = q.upcoming || [];
+        const nextHtml = next
+          ? `<div style="margin:8px 0;padding:10px;border:1px solid var(--line);border-radius:12px;background:#fff">
+              <div><strong>下一个待发：</strong>${next.filename}</div>
+              <div class="muted">创建时间：${next.created_at} · 待发总数：${q.pending_count || 0}</div>
+              <div>将使用标题：${next.title}</div>
+              <div class="muted">文案：${next.description}</div>
+            </div>`
+          : `<div class="muted" style="margin:8px 0">暂无待发视频${q.scan_error ? " · " + q.scan_error : ""}</div>`;
+
+        const draftsHtml = upcoming.length
+          ? upcoming.map((v, idx) => `
+            <div class="draft-card" data-qid="${q.id}" data-file="${encodeURIComponent(v.filename)}" style="border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:8px">
+              <div><strong>#${idx + 1}</strong> ${v.filename}
+                <span class="muted">（${v.created_at}）</span>
+                ${idx === 0 ? '<span class="ok">下一条</span>' : ''}
+              </div>
+              <div class="row" style="margin-top:8px">
+                <label>标题</label>
+                <input class="d-title" placeholder="${defaultCopy}" value="${(v.title_draft || "").replace(/"/g, "&quot;")}" />
+              </div>
+              <div class="row">
+                <label>文案</label>
+                <input class="d-desc" placeholder="${defaultCopy}" value="${(v.description_draft || "").replace(/"/g, "&quot;")}" />
+              </div>
+              <div class="row">
+                <label>标签</label>
+                <input class="d-tags" placeholder="逗号分隔，如 旅行,日常" value="${(v.tags_draft || "").replace(/"/g, "&quot;")}" />
+              </div>
+            </div>`).join("")
+          : "";
+
+        return `<div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:12px">
+          <div class="row" style="justify-content:space-between">
+            <div>
+              <div><strong>${q.folder_path}</strong></div>
+              <div class="muted">每天 ${q.daily_time} → ${formatTargets(q)}
+                · 已发 ${ (q.uploaded_filenames || []).length } 个
+              </div>
+              <div class="${statusCls}">${enabled ? "启用" : "停用"} · ${q.last_status || "-"} · ${q.last_run_at || ""} ${q.last_filename || ""} ${q.last_error || ""}</div>
+            </div>
+            <div class="row" style="flex:0 0 auto">
+              <button class="secondary" data-fq-run="${q.id}">立即发下一条</button>
+              <button class="secondary" data-fq-toggle="${q.id}" data-enabled="${enabled ? "0" : "1"}">${enabled ? "停用" : "启用"}</button>
+              <button class="danger" data-fq-del="${q.id}">删除</button>
+            </div>
+          </div>
+          ${nextHtml}
+          ${draftsHtml ? `<div style="margin-top:8px"><div class="muted" style="margin-bottom:6px">最近待发（最多 5 个，可提前填写；空则默认「${defaultCopy}」）</div>${draftsHtml}
+            <button class="secondary" data-fq-save="${q.id}">保存这 5 条的标题/文案/标签</button></div>` : ""}
+        </div>`;
+      }).join("");
+
+      box.querySelectorAll("[data-fq-run]").forEach((btn) => {
+        btn.onclick = async () => {
+          $("fqLog").textContent = "正在上传下一条…";
+          btn.disabled = true;
+          try {
+            const res = await fetch(`/api/folder-queues/${btn.dataset.fqRun}/run`, {
+              method: "POST",
+              headers: authHeaders(),
+            }).then((r) => r.json());
+            if (!res.ok) throw new Error(res.error || "执行失败");
+            $("fqLog").textContent = res.skipped
+              ? `跳过：${res.message}`
+              : `成功：${res.filename}\n标题：${res.title}\n文案：${res.description}\n上传到：${res.targets_summary || (res.upload_platform + "/" + res.upload_account)}\n剩余待发：${res.remaining}`;
+            await refreshFolderQueues();
+          } catch (e) {
+            $("fqLog").textContent = `失败：${e.message}`;
+            await refreshFolderQueues();
+          } finally {
+            btn.disabled = false;
+          }
+        };
+      });
+      box.querySelectorAll("[data-fq-toggle]").forEach((btn) => {
+        btn.onclick = async () => {
+          await api(`/api/folder-queues/${btn.dataset.fqToggle}/toggle`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: btn.dataset.enabled === "1" }),
+          });
+          await refreshFolderQueues();
+        };
+      });
+      box.querySelectorAll("[data-fq-del]").forEach((btn) => {
+        btn.onclick = async () => {
+          if (!confirm("删除该文件夹队列？（不会删除本地视频文件）")) return;
+          await api(`/api/folder-queues/${btn.dataset.fqDel}`, { method: "DELETE" });
+          await refreshFolderQueues();
+        };
+      });
+      box.querySelectorAll("[data-fq-save]").forEach((btn) => {
+        btn.onclick = async () => {
+          const qid = btn.dataset.fqSave;
+          const drafts = {};
+          box.querySelectorAll(`.draft-card[data-qid="${qid}"]`).forEach((card) => {
+            const filename = decodeURIComponent(card.dataset.file);
+            drafts[filename] = {
+              title: card.querySelector(".d-title").value,
+              description: card.querySelector(".d-desc").value,
+              tags: card.querySelector(".d-tags").value,
+            };
+          });
+          try {
+            await api(`/api/folder-queues/${qid}/drafts`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ drafts }),
+            });
+            $("fqLog").textContent = "已保存标题 / 文案 / 标签。";
+            await refreshFolderQueues();
+          } catch (e) {
+            $("fqLog").textContent = `保存失败：${e.message}`;
+          }
+        };
+      });
+    }
+
+    $("btnPickFq").onclick = async () => {
+      $("fqLog").textContent = "请在弹出的系统窗口中选择文件夹…";
+      $("btnPickFq").disabled = true;
+      try {
+        const res = await fetch("/api/pick-folder", {
+          method: "POST",
+          headers: authHeaders(),
+        });
+        const text = await res.text();
+        let data = {};
+        try { data = JSON.parse(text); } catch (_) {}
+        if (!res.ok || data.ok === false) {
+          if (res.status === 404) {
+            throw new Error("接口不存在，请重启服务：uv run python -m web_mvp");
+          }
+          throw new Error(data.error || text.slice(0, 120) || "选择失败");
+        }
+        $("fqPath").value = data.path;
+        $("fqLog").textContent = `已选择：${data.path}`;
+      } catch (e) {
+        $("fqLog").textContent = `选择文件夹：${e.message}`;
+      } finally {
+        $("btnPickFq").disabled = false;
+      }
+    };
+
+    $("btnAddFq").onclick = async () => {
+      const folderPath = ($("fqPath").value || "").trim();
+      if (!folderPath) {
+        $("fqLog").textContent = "请先选择要监控的文件夹";
+        $("btnPickFq").focus();
+        return;
+      }
+      $("btnAddFq").disabled = true;
+      try {
+        const targets = selectedTargets("fqTargets");
+        if (!targets.length) throw new Error("请至少勾选一个上传目标账号");
+        await api("/api/folder-queues", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            folder_path: folderPath,
+            daily_time: $("fqTime").value,
+            targets,
+            tid: Number($("fqTid").value || biliDefaultTid),
+          }),
+        });
+        $("fqPath").value = "";
+        $("fqLog").textContent = "已添加文件夹队列。可先给待发视频填标题文案，或点「立即发下一条」测试。";
+        await refreshFolderQueues();
+      } catch (e) {
+        $("fqLog").textContent = `失败：${e.message}`;
+      } finally {
+        $("btnAddFq").disabled = false;
+      }
+    };
+
+    async function bootApp() {
+      await Promise.all([
+        loadBiliPartitions().catch((e) => console.warn("加载B站分区失败", e)),
+        refreshAccounts().catch((e) => {
+          $("accountBody").innerHTML = `<tr><td colspan="4" class="bad">${e.message}</td></tr>`;
+        }),
+        refreshSubscriptions().catch((e) => {
+          $("subBody").innerHTML = `<tr><td colspan="5" class="bad">${e.message}</td></tr>`;
+        }),
+        refreshFolderQueues().catch((e) => {
+          $("fqList").innerHTML = `<p class="bad">${e.message}</p>`;
+        }),
+      ]);
+    }
+
+    async function boot() {
+      setAuthMode("login");
+      const token = getToken();
+      if (!token) {
+        showAuthGate("");
+        return;
+      }
+      try {
+        const me = await api("/api/auth/me");
+        setSession(token, me.user);
+        showApp();
+        await bootApp();
+      } catch (e) {
+        clearSession();
+        showAuthGate(e.message || "请先登录");
+      }
+    }
+
+    boot();
+  </script>
+</body>
+</html>

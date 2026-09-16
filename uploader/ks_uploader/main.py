@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -27,15 +28,49 @@ KUAISHOU_MANAGE_URL = "https://cp.kuaishou.com/article/manage/video?status=2&fro
 KUAISHOU_LOGIN_URL = "https://passport.kuaishou.com/pc/account/login/?sid=kuaishou.web.cp.api&callback=https%3A%2F%2Fcp.kuaishou.com%2Frest%2Finfra%2Fsts%3FfollowUrl%3Dhttps%253A%252F%252Fcp.kuaishou.com%252Farticle%252Fpublish%252Fvideo%26setRootDomain%3Dtrue"
 KUAISHOU_UPLOAD_URL_PATTERN = "**/article/publish/video**"
 KUAISHOU_MANAGE_URL_PATTERN = "**/article/manage/video?status=2&from=publish**"
+KUAISHOU_MANAGE_URL_PATTERNS = (
+    "**/article/manage/video?status=2&from=publish**",
+    "**/article/manage/video**",
+    "**/article/manage/**",
+)
 KUAISHOU_COOKIE_INVALID_SELECTOR = "div.names div.container div.name:text('机构服务')"
 KUAISHOU_PUBLISH_STRATEGY_IMMEDIATE = "immediate"
 KUAISHOU_PUBLISH_STRATEGY_SCHEDULED = "scheduled"
 KUAISHOU_UPLOAD_TIMEOUT_SECONDS = 480
-KUAISHOU_PUBLISH_ATTEMPTS = 3
+KUAISHOU_PUBLISH_ATTEMPTS = 6
+KUAISHOU_PUBLISH_NAV_TIMEOUT_MS = 15000
 
 
 def _msg(emoji: str, text: str) -> str:
     return f"{emoji} {text}"
+
+
+async def _wait_for_kuaishou_publish_success(page: Page, timeout_ms: int = KUAISHOU_PUBLISH_NAV_TIMEOUT_MS) -> None:
+    """Wait until publish redirects to manage page. Fast handoff pages may use slightly different URLs."""
+    last_error: Exception | None = None
+    deadline = asyncio.get_running_loop().time() + (timeout_ms / 1000)
+    while asyncio.get_running_loop().time() < deadline:
+        current = page.url or ""
+        if "/article/manage/" in current:
+            return
+        for pattern in KUAISHOU_MANAGE_URL_PATTERNS:
+            remaining_ms = max(1000, int((deadline - asyncio.get_running_loop().time()) * 1000))
+            try:
+                await page.wait_for_url(pattern, timeout=min(5000, remaining_ms))
+                return
+            except Exception as exc:
+                last_error = exc
+                break
+        # Success toast / text without URL change yet
+        try:
+            if await page.get_by_text("发布成功").count():
+                return
+        except Exception:
+            pass
+        await asyncio.sleep(0.5)
+    raise TimeoutError(
+        f"等待快手发布完成超时（>{timeout_ms}ms），当前页面: {page.url}"
+    ) from last_error
 
 
 async def _dump_page_debug(page, tag: str) -> str:
@@ -53,6 +88,105 @@ async def _dump_page_debug(page, tag: str) -> str:
     except Exception:
         pass
     return str(base.resolve())
+
+
+def _limit_kuaishou_caption_tags(text: str, max_tags: int = 4) -> str:
+    """Kuaishou submit rejects captions with more than 4 #topics (result=1000)."""
+    text = (text or "").strip()
+    if not text or max_tags < 0:
+        return text
+    # Keep leading copy, then at most max_tags hashtags (with their trailing text chunks).
+    parts = re.split(r"(#)", text)
+    # parts like: ['清唱也来一则', '#', '盛夏的果实 ', '#', '莫文蔚 ', ...]
+    out: list[str] = []
+    tag_count = 0
+    i = 0
+    while i < len(parts):
+        part = parts[i]
+        if part == "#" and i + 1 < len(parts):
+            if tag_count >= max_tags:
+                # Drop remaining hashtags but keep plain text after stripping '#'.
+                rest = "".join(parts[i + 1 :])
+                rest = re.sub(r"#\S*", "", rest)
+                out.append(rest)
+                break
+            tag_count += 1
+            out.append("#" + parts[i + 1])
+            i += 2
+            continue
+        out.append(part)
+        i += 1
+    cleaned = "".join(out)
+    # Collapse leftover whitespace from dropped tags.
+    return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+
+
+async def _fill_kuaishou_description(page: Page, text: str) -> None:
+    """Fill 作品描述 without keyboard-typing @/# (those open mention/topic popovers
+    that silently block the later 「发布」click)."""
+    text = _limit_kuaishou_caption_tags((text or "").strip())
+    # Full-width @ avoids opening the friend-mention picker if we fall back to typing.
+    text = re.sub(r"@(\S+)", r"＠\1", text)
+    await _focus_desc_editor(page)
+    # Clear existing content, then insertText so React contenteditable sees a real edit
+    # without firing per-character @ / # autocomplete.
+    filled = await page.evaluate(
+        """(value) => {
+            const el = document.activeElement;
+            if (!el || el.getAttribute('contenteditable') !== 'true') return false;
+            el.focus();
+            document.execCommand('selectAll', false);
+            document.execCommand('insertText', false, value);
+            return true;
+        }""",
+        text,
+    )
+    if not filled:
+        await page.keyboard.press("Meta+A")
+        await page.keyboard.press("Backspace")
+        await page.keyboard.type(text)
+    # Dismiss any leftover mention / topic / select popovers.
+    await page.keyboard.press("Escape")
+    await asyncio.sleep(0.2)
+    await page.keyboard.press("Escape")
+
+
+async def _wait_kuaishou_video_uploaded(page: Page, timeout_seconds: int = KUAISHOU_UPLOAD_TIMEOUT_SECONDS) -> None:
+    """Wait until upload is truly ready — not merely '上传中' missing (it may not have appeared yet)."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_seconds
+    saw_uploading = False
+    retry_count = 0
+    while loop.time() < deadline:
+        try:
+            if await page.locator("text=上传失败").count():
+                raise RuntimeError("快手显示上传失败")
+            uploading = await page.locator("text=上传中").count()
+            if uploading:
+                saw_uploading = True
+            reupload = await page.get_by_text("重新上传", exact=True).count()
+            publish_btn = await page.locator(
+                "div[class*='_edit-section-btns'] div[class*='_button-primary']"
+            ).filter(has_text=re.compile(r"^发布$")).count()
+            # Ready when: not uploading, publish CTA present, and either we saw uploading
+            # finish or the post-upload 「重新上传」 control is already on screen.
+            if uploading == 0 and publish_btn > 0 and (saw_uploading or reupload > 0):
+                # Tiny settle so cover/finish APIs can land before publish click.
+                await asyncio.sleep(1)
+                kuaishou_logger.success(_msg("🥳", "视频已经传完啦"))
+                return
+            if retry_count % 5 == 0:
+                kuaishou_logger.info(_msg("🏃", "小人正在努力上传视频"))
+            await asyncio.sleep(1)
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            kuaishou_logger.warning(_msg("😵", f"检查上传状态时出错，小人继续重试: {exc}"))
+            await asyncio.sleep(1)
+        retry_count += 1
+    raise TimeoutError(
+        f"等待快手视频上传完成超时（>{timeout_seconds}秒），已停止发布"
+    )
 
 
 async def _focus_desc_editor(page) -> None:
@@ -94,7 +228,7 @@ async def _focus_desc_editor(page) -> None:
 
 
 async def _click_visible_publish_confirm(page: Page) -> bool:
-    """Confirm an already-open Ant Design publish dialog before touching the page behind it."""
+    """Confirm an already-open Ant Design publish dialog (same as historical sau flow)."""
     modal = page.locator("div.ant-modal-confirm-centered:visible").first
     if not await modal.count():
         return False
@@ -105,6 +239,97 @@ async def _click_visible_publish_confirm(page: Page) -> bool:
 
     await primary_button.click(timeout=8000)
     return True
+
+
+async def _click_kuaishou_publish_button(page: Page) -> None:
+    """Click the form CTA 「发布」 — same approach as historical sau / proven diagnostic.
+
+    Current creator UI uses a custom div (not <button>):
+      div[class*='_edit-section-btns'] > div[class*='_button-primary'] > div: 发布
+    Do NOT synthesize MouseEvent via JS: Kuaishou ignores untrusted clicks, and
+    evaluating the locator after a successful navigation just times out.
+    """
+    section = page.locator("div[class*='_edit-section-btns']").first
+    if await section.count():
+        await section.scroll_into_view_if_needed(timeout=5000)
+
+    btn = page.locator("div[class*='_edit-section-btns'] div[class*='_button-primary']").filter(
+        has_text=re.compile(r"^发布$")
+    ).first
+    if not await btn.count():
+        btn = page.get_by_text("发布", exact=True).first
+    if not await btn.count():
+        dbg = await _dump_page_debug(page, "publish_btn_not_found")
+        raise RuntimeError(f"未找到快手发布按钮。已保存调试信息到 {dbg}")
+
+    await btn.scroll_into_view_if_needed(timeout=5000)
+    await btn.click(timeout=8000)
+
+
+async def _publish_once_and_wait(page: Page) -> None:
+    """Click publish and wait for manage redirect, surfacing submit API errors."""
+    submit_payload: dict | None = None
+
+    def on_response(response) -> None:
+        nonlocal submit_payload
+        if "/video/pc/submit" not in (response.url or ""):
+            return
+        if response.request.resource_type not in ("xhr", "fetch"):
+            return
+
+        async def _read() -> None:
+            nonlocal submit_payload
+            try:
+                data = await response.json()
+            except Exception:
+                return
+            if isinstance(data, dict):
+                submit_payload = data
+
+        # Schedule on the running loop (patchright callback is sync).
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_read())
+        except RuntimeError:
+            pass
+
+    page.on("response", on_response)
+    try:
+        confirmed = await _click_visible_publish_confirm(page)
+        if not confirmed:
+            await _click_kuaishou_publish_button(page)
+
+        await asyncio.sleep(1)
+        confirm_button = page.get_by_text("确认发布")
+        if await confirm_button.count() > 0:
+            await confirm_button.first.click()
+        await _click_visible_publish_confirm(page)
+
+        deadline = asyncio.get_running_loop().time() + (KUAISHOU_PUBLISH_NAV_TIMEOUT_MS / 1000)
+        while asyncio.get_running_loop().time() < deadline:
+            if submit_payload is not None:
+                result = submit_payload.get("result")
+                if result not in (1, "1"):
+                    msg = submit_payload.get("message") or str(submit_payload)
+                    raise RuntimeError(f"快手拒绝发布: {msg}")
+            current = page.url or ""
+            if "/article/manage/" in current:
+                return
+            if await page.get_by_text("发布成功").count():
+                return
+            await asyncio.sleep(0.4)
+
+        if submit_payload is not None and submit_payload.get("result") not in (1, "1"):
+            msg = submit_payload.get("message") or str(submit_payload)
+            raise RuntimeError(f"快手拒绝发布: {msg}")
+        raise TimeoutError(
+            f"等待快手发布完成超时（>{KUAISHOU_PUBLISH_NAV_TIMEOUT_MS}ms），当前页面: {page.url}"
+        )
+    finally:
+        try:
+            page.remove_listener("response", on_response)
+        except Exception:
+            pass
 
 
 def _print_ks_qrcode(qrcode_content: str, qrcode_path: Path) -> None:
@@ -501,9 +726,9 @@ class KSBaseUploader(BaseVideoUploader):
                 pass
 
         if not closed:
-            print("未检测到 Joyride 遮罩，继续执行")
-        else:
-            await asyncio.sleep(0.5)
+            return False
+        await asyncio.sleep(0.5)
+        return True
 
 
 class KSVideo(KSBaseUploader):
@@ -663,43 +888,15 @@ class KSVideo(KSBaseUploader):
             kuaishou_logger.info(_msg("✍️", "小人开始填描述和话题"))
             # 再次检查并关闭 Joyride（可能在文件上传后才弹出）
             await self.close_guide_overlay(page)
-            await _focus_desc_editor(page)
-            await page.keyboard.press("Backspace")
-            await page.keyboard.press("Control+KeyA")
-            await page.keyboard.press("Delete")
-            await page.keyboard.type(self.desc or self.title)
-            await page.keyboard.press("Enter")
+            await _fill_kuaishou_description(page, self.desc or self.title)
 
             for index, tag in enumerate(self.tags[:3], start=1):
                 kuaishou_logger.info(_msg("🏷️", f"小人正在添加第 {index} 个话题: #{tag}"))
                 await page.keyboard.type(f"#{tag} ")
                 await asyncio.sleep(2)
+                await page.keyboard.press("Escape")
 
-            loop = asyncio.get_running_loop()
-            upload_deadline = loop.time() + KUAISHOU_UPLOAD_TIMEOUT_SECONDS
-            retry_count = 0
-            while loop.time() < upload_deadline:
-                try:
-                    number = await page.locator("text=上传中").count()
-                    if number == 0:
-                        kuaishou_logger.success(_msg("🥳", "视频已经传完啦"))
-                        break
-
-                    if retry_count % 5 == 0:
-                        kuaishou_logger.info(_msg("🏃", "小人正在努力上传视频"))
-
-                    if await page.locator("text=上传失败").count():
-                        await self.handle_upload_error(page)
-
-                    await asyncio.sleep(2)
-                except Exception as exc:
-                    kuaishou_logger.warning(_msg("😵", f"检查上传状态时出错，小人继续重试: {exc}"))
-                    await asyncio.sleep(2)
-                retry_count += 1
-            else:
-                raise TimeoutError(
-                    f"等待快手视频上传完成超时（>{KUAISHOU_UPLOAD_TIMEOUT_SECONDS}秒），已停止发布"
-                )
+            await _wait_kuaishou_video_uploaded(page)
 
             await self.set_thumbnail(page)
 
@@ -711,17 +908,9 @@ class KSVideo(KSBaseUploader):
             last_publish_error = None
             for attempt in range(1, KUAISHOU_PUBLISH_ATTEMPTS + 1):
                 try:
-                    confirmed = await _click_visible_publish_confirm(page)
-                    if not confirmed:
-                        publish_button = page.get_by_text("发布", exact=True)
-                        if await publish_button.count() == 0:
-                            raise RuntimeError("未找到快手发布按钮")
-                        await publish_button.click()
-
-                    await asyncio.sleep(1)
-                    await _click_visible_publish_confirm(page)
-
-                    await page.wait_for_url(KUAISHOU_MANAGE_URL_PATTERN, timeout=5000)
+                    await self.close_guide_overlay(page)
+                    await page.keyboard.press("Escape")
+                    await _publish_once_and_wait(page)
                     kuaishou_logger.success(_msg("🥳", "视频发布成功，小人开心收工"))
                     break
                 except Exception as exc:
@@ -729,6 +918,10 @@ class KSVideo(KSBaseUploader):
                     kuaishou_logger.info(_msg(
                         "🏃", f"小人正在冲刺发布视频（{attempt}/{KUAISHOU_PUBLISH_ATTEMPTS}）: {exc}"
                     ))
+                    # Business rejection (too many tags, etc.) won't succeed on retry.
+                    if isinstance(exc, RuntimeError) and str(exc).startswith("快手拒绝发布:"):
+                        raise
+                    await _dump_page_debug(page, f"publish_fail_{attempt}")
                     if self.debug:
                         await page.screenshot(full_page=True)
                     await asyncio.sleep(1)
@@ -867,7 +1060,7 @@ class KSNote(KSBaseUploader):
                 if await confirm_button.count() > 0:
                     await confirm_button.click()
 
-                await page.wait_for_url(KUAISHOU_MANAGE_URL_PATTERN, timeout=5000)
+                await _wait_for_kuaishou_publish_success(page)
                 kuaishou_logger.success(_msg("🥳", "图文发布成功，小人开心收工"))
                 break
             except Exception as exc:

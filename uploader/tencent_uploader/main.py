@@ -73,7 +73,8 @@ def _build_launch_kwargs(headless: bool) -> dict:
     launch_kwargs = {"headless": headless}
     if LOCAL_CHROME_PATH:
         launch_kwargs["executable_path"] = LOCAL_CHROME_PATH
-    else:
+    elif not headless:
+        # Only attach system Chrome when a visible window is intentionally requested.
         launch_kwargs["channel"] = "chrome"
     return launch_kwargs
 
@@ -236,6 +237,26 @@ async def _save_tencent_qrcode(page: Page, account_file: str, previous_qrcode_pa
 
 
 async def _is_tencent_login_completed(page: Page) -> bool:
+    url = (page.url or "").strip()
+
+    # After phone confirm, WeChat often lands on /platform home (not post/create).
+    if "channels.weixin.qq.com/platform" in url and "login" not in url.lower():
+        login_markers = [
+            page.locator("div.login-qrcode-wrap").first,
+            page.locator("div.qrcode-wrap").first,
+            page.locator('span:has-text("微信扫码登录 视频号助手")').first,
+        ]
+        still_login = False
+        for marker in login_markers:
+            try:
+                if await marker.count() and await marker.is_visible():
+                    still_login = True
+                    break
+            except Exception:
+                continue
+        if not still_login:
+            return True
+
     publish_markers = [
         page.locator('div:has-text("发表视频")').first,
         page.locator('button:has-text("发表")').first,

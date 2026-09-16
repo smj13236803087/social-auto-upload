@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AutoSelf 管理后台</title>
+  <style>
+    :root {
+      --primary: #1677ff;
+      --primary-2: #4096ff;
+      --text: #1f2937;
+      --muted: #64748b;
+      --line: #e5e7eb;
+      --bg: #f5f5f5;
+      --sider: #001529;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      min-height: 100vh;
+    }
+
+    /* ===== Login (match mini-program-backstage) ===== */
+    .login-page {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      position: relative;
+      overflow: hidden;
+      background: #f8fafc;
+    }
+    .login-bg {
+      position: absolute; inset: 0;
+      background: linear-gradient(135deg, #f0f7ff 0%, #e6f4ff 100%);
+      z-index: 0;
+    }
+    .circle1, .circle2 {
+      position: absolute;
+      border-radius: 50%;
+    }
+    .circle1 {
+      width: 300px; height: 300px;
+      background: linear-gradient(135deg, rgba(22,119,255,.2), rgba(64,150,255,.1));
+      top: -100px; right: -50px;
+      animation: float 6s ease-in-out infinite;
+    }
+    .circle2 {
+      width: 200px; height: 200px;
+      background: linear-gradient(135deg, rgba(22,119,255,.15), rgba(64,150,255,.05));
+      bottom: -50px; left: -50px;
+      animation: float 8s ease-in-out infinite reverse;
+    }
+    @keyframes float {
+      0%, 100% { transform: translateY(0) rotate(0); }
+      50% { transform: translateY(-20px) rotate(5deg); }
+    }
+    .login-content {
+      position: relative; z-index: 1; width: 100%;
+      display: flex; flex-direction: column; align-items: center;
+      padding: 16px;
+    }
+    .login-card {
+      width: 100%; max-width: 420px;
+      background: rgba(255,255,255,.95);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255,255,255,.8);
+      border-radius: 24px;
+      box-shadow: 0 10px 40px rgba(0,0,0,.08);
+      padding: 32px;
+      transition: transform .3s ease;
+    }
+    .login-card:hover { transform: translateY(-5px); }
+    .logo-mark {
+      width: 72px; height: 72px; margin: 0 auto 20px;
+      border-radius: 15px;
+      display: grid; place-items: center;
+      font-weight: 800; font-size: 1.4rem; color: #fff;
+      background: linear-gradient(135deg, #1677ff, #4096ff);
+      box-shadow: 0 4px 12px rgba(22,119,255,.3);
+    }
+    .welcome {
+      text-align: center; margin-bottom: 28px;
+      font-size: 18px; color: #4b5563; letter-spacing: .5px;
+    }
+    .welcome span { color: #1677ff; font-weight: 600; }
+    .field { margin-bottom: 18px; }
+    .field label {
+      display: block; margin-bottom: 6px;
+      font-size: 13px; color: #6b7280;
+    }
+    .field input, .field select,
+    .toolbar input, .toolbar select,
+    .modal-body input, .modal-body select {
+      width: 100%;
+      height: 42px;
+      border-radius: 8px;
+      border: 1px solid #e5e7eb;
+      padding: 0 12px;
+      font: inherit;
+      background: #fff;
+      transition: border-color .2s, box-shadow .2s;
+    }
+    .field input:focus, .toolbar input:focus, .toolbar select:focus,
+    .modal-body input:focus, .modal-body select:focus {
+      outline: none;
+      border-color: #1677ff;
+      box-shadow: 0 0 0 2px rgba(22,119,255,.15);
+    }
+    .btn-primary {
+      width: 100%; height: 45px; border: none; border-radius: 8px;
+      color: #fff; font-size: 16px; font-weight: 500; cursor: pointer;
+      background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
+      text-shadow: 0 1px 2px rgba(0,0,0,.1);
+      transition: transform .2s, box-shadow .2s;
+    }
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 16px rgba(22,119,255,.25);
+    }
+    .btn-primary:disabled { opacity: .6; cursor: not-allowed; transform: none; box-shadow: none; }
+    .login-tip {
+      margin-top: 14px; text-align: center; color: #ef4444; font-size: 13px; min-height: 20px;
+    }
+    .copyright {
+      margin-top: 24px; text-align: center; color: #666; font-size: 13px;
+    }
+
+    /* ===== Dashboard layout ===== */
+    .layout { display: none; min-height: 100vh; }
+    .layout.show { display: flex; }
+    .sider {
+      width: 220px; flex-shrink: 0;
+      background: var(--sider); color: #fff;
+      display: flex; flex-direction: column;
+    }
+    .sider-brand {
+      height: 64px; margin: 0 16px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .sider-brand .mark {
+      width: 32px; height: 32px; border-radius: 8px;
+      background: linear-gradient(135deg, #1677ff, #4096ff);
+      display: grid; place-items: center; font-weight: 800; font-size: 12px;
+    }
+    .sider-brand span { font-size: 16px; font-weight: 600; white-space: nowrap; }
+    .sider-menu { padding: 8px 0; }
+    .menu-item {
+      margin: 4px 8px; padding: 10px 16px; border-radius: 8px;
+      color: rgba(255,255,255,.75); cursor: default;
+      display: flex; align-items: center; gap: 10px; font-size: 14px;
+    }
+    .menu-item.active {
+      background: var(--primary); color: #fff; font-weight: 600;
+    }
+    .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    .header {
+      height: 64px; background: #fff; padding: 0 24px;
+      display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid #f0f0f0;
+    }
+    .header-title { font-size: 16px; font-weight: 500; }
+    .header-user {
+      display: flex; align-items: center; gap: 10px; color: #334155; font-size: 14px;
+    }
+    .avatar {
+      width: 32px; height: 32px; border-radius: 50%;
+      background: #e6f4ff; color: #1677ff;
+      display: grid; place-items: center; font-weight: 700; font-size: 13px;
+    }
+    .link-btn {
+      border: none; background: transparent; color: #64748b; cursor: pointer; font: inherit;
+      padding: 4px 8px; border-radius: 6px;
+    }
+    .link-btn:hover { color: #1677ff; background: #f0f7ff; }
+    .content { margin: 16px; flex: 1; }
+    .panel {
+      background: #fff; border-radius: 8px; padding: 20px 20px 12px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.03);
+    }
+    .panel-head {
+      display: flex; flex-wrap: wrap; gap: 12px;
+      align-items: center; justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .panel-head h2 { margin: 0; font-size: 16px; font-weight: 600; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .toolbar input { width: 200px; height: 32px; }
+    .toolbar select { width: 120px; height: 32px; }
+    .ant-btn {
+      height: 32px; padding: 0 14px; border-radius: 6px;
+      border: 1px solid transparent; font: inherit; font-size: 13px;
+      cursor: pointer; display: inline-flex; align-items: center; gap: 4px;
+    }
+    .ant-btn-primary {
+      background: #1677ff; color: #fff; border-color: #1677ff;
+    }
+    .ant-btn-primary:hover { background: #4096ff; }
+    .ant-btn-default {
+      background: #fff; color: #334155; border-color: #d9d9d9;
+    }
+    .ant-btn-default:hover { color: #1677ff; border-color: #1677ff; }
+    .ant-btn-dangerous {
+      background: #fff; color: #ff4d4f; border-color: #ff4d4f;
+    }
+    .ant-btn-dangerous:hover { background: #fff1f0; }
+    table.data {
+      width: 100%; border-collapse: collapse; font-size: 13px;
+    }
+    table.data th, table.data td {
+      text-align: left; padding: 12px 10px;
+      border-bottom: 1px solid #f0f0f0; vertical-align: middle;
+    }
+    table.data th {
+      background: #fafafa; color: #475569; font-weight: 600;
+    }
+    table.data tr:hover td { background: #fafafa; }
+    .tag {
+      display: inline-block; padding: 0 8px; height: 22px; line-height: 22px;
+      border-radius: 4px; font-size: 12px; border: 1px solid transparent;
+    }
+    .tag-admin { color: #d48806; background: #fffbe6; border-color: #ffe58f; }
+    .tag-user { color: #1677ff; background: #e6f4ff; border-color: #91caff; }
+    .tag-active { color: #389e0d; background: #f6ffed; border-color: #b7eb8f; }
+    .tag-disabled { color: #cf1322; background: #fff1f0; border-color: #ffa39e; }
+    .pager {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 0 4px; color: var(--muted); font-size: 13px;
+    }
+    .pager .actions { display: flex; gap: 8px; }
+    .msg {
+      margin-top: 10px; color: var(--muted); font-size: 13px; min-height: 18px;
+    }
+    .msg.err { color: #ff4d4f; }
+
+    .modal-mask {
+      position: fixed; inset: 0; background: rgba(0,0,0,.45);
+      display: none; align-items: center; justify-content: center;
+      padding: 16px; z-index: 100;
+    }
+    .modal-mask.show { display: flex; }
+    .modal {
+      width: min(480px, 100%); background: #fff; border-radius: 8px;
+      box-shadow: 0 6px 16px rgba(0,0,0,.12);
+      overflow: hidden;
+    }
+    .modal-header {
+      padding: 16px 20px; border-bottom: 1px solid #f0f0f0;
+      font-size: 16px; font-weight: 600;
+    }
+    .modal-body { padding: 20px; }
+    .modal-body .field { margin-bottom: 14px; }
+    .modal-footer {
+      padding: 12px 20px; border-top: 1px solid #f0f0f0;
+      display: flex; justify-content: flex-end; gap: 8px;
+    }
+    .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    @media (max-width: 800px) {
+      .sider { display: none; }
+      .toolbar input { width: 140px; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Login -->
+  <div id="loginView" class="login-page">
+    <div class="login-bg">
+      <div class="circle1"></div>
+      <div class="circle2"></div>
+    </div>
+    <div class="login-content">
+      <div class="login-card">
+        <div class="logo-mark">AS</div>
+        <div class="welcome">欢迎登录 <span>AutoSelf 管理后台</span></div>
+        <div class="field">
+          <label>邮箱</label>
+          <input id="loginEmail" type="email" placeholder="请输入邮箱" autocomplete="username" />
+        </div>
+        <div class="field">
+          <label>密码</label>
+          <input id="loginPassword" type="password" placeholder="请输入密码" autocomplete="current-password" />
+        </div>
+        <button type="button" class="btn-primary" id="btnLogin">登 录</button>
+        <div class="login-tip" id="loginLog"></div>
+      </div>
+      <div class="copyright">仅管理员可登录 · 无注册入口</div>
+    </div>
+  </div>
+
+  <!-- Dashboard -->
+  <div id="appView" class="layout">
+    <aside class="sider">
+      <div class="sider-brand">
+        <div class="mark">AS</div>
+        <span>AutoSelf 后台</span>
+      </div>
+      <nav class="sider-menu">
+        <div class="menu-item active">👤 用户列表</div>
+      </nav>
+    </aside>
+    <div class="main">
+      <header class="header">
+        <div class="header-title">AutoSelf 管理后台</div>
+        <div class="header-user">
+          <span id="adminChip">管理员</span>
+          <div class="avatar" id="adminAvatar">A</div>
+          <button type="button" class="link-btn" id="btnLogout">退出登录</button>
+        </div>
+      </header>
+      <main class="content">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>用户列表</h2>
+            <div class="toolbar">
+              <input id="q" placeholder="搜索邮箱 / 昵称" />
+              <select id="roleFilter">
+                <option value="">全部角色</option>
+                <option value="user">普通用户</option>
+                <option value="admin">管理员</option>
+              </select>
+              <select id="statusFilter">
+                <option value="">全部状态</option>
+                <option value="active">启用</option>
+                <option value="disabled">禁用</option>
+              </select>
+              <button type="button" class="ant-btn ant-btn-default" id="btnSearch">查询</button>
+              <button type="button" class="ant-btn ant-btn-default" id="btnReload">刷新</button>
+              <button type="button" class="ant-btn ant-btn-primary" id="btnCreate">新增用户</button>
+            </div>
+          </div>
+          <table class="data">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>邮箱</th>
+                <th>昵称</th>
+                <th>角色</th>
+                <th>状态</th>
+                <th>套餐</th>
+                <th>创建时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="userBody">
+              <tr><td colspan="8" style="color:#94a3b8">加载中…</td></tr>
+            </tbody>
+          </table>
+          <div class="pager">
+            <div id="pagerInfo">-</div>
+            <div class="actions">
+              <button type="button" class="ant-btn ant-btn-default" id="btnPrev">上一页</button>
+              <button type="button" class="ant-btn ant-btn-default" id="btnNext">下一页</button>
+            </div>
+          </div>
+          <div class="msg" id="appLog"></div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div class="modal-mask" id="editMask">
+    <div class="modal">
+      <div class="modal-header" id="editTitle">新增用户</div>
+      <div class="modal-body">
+        <input type="hidden" id="editId" />
+        <div class="field"><label>邮箱</label><input id="editEmail" type="email" /></div>
+        <div class="field"><label>昵称</label><input id="editUsername" /></div>
+        <div class="field"><label>密码</label><input id="editPassword" type="password" placeholder="新增必填；编辑留空则不改" /></div>
+        <div class="field">
+          <label>角色</label>
+          <select id="editRole">
+            <option value="user">普通用户</option>
+            <option value="admin">管理员</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>状态</label>
+          <select id="editStatus">
+            <option value="active">启用</option>
+            <option value="disabled">禁用</option>
+          </select>
+        </div>
+        <div class="field"><label>套餐</label><input id="editPlan" value="free" /></div>
+        <div class="msg err" id="editLog"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="ant-btn ant-btn-default" id="btnCancel">取消</button>
+        <button type="button" class="ant-btn ant-btn-primary" id="btnSave">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const TOKEN_KEY = "autoself_admin_token";
+    let page = 1;
+    const pageSize = 20;
+    let total = 0;
+    let currentAdmin = null;
+
+    function getToken() { return localStorage.getItem(TOKEN_KEY) || ""; }
+    function setToken(t) { localStorage.setItem(TOKEN_KEY, t || ""); }
+    function clearToken() { localStorage.removeItem(TOKEN_KEY); }
+    function authHeaders(extra = {}) {
+      const h = { ...(extra || {}) };
+      const t = getToken();
+      if (t) h.Authorization = `Bearer ${t}`;
+      return h;
+    }
+    function showLogin(msg) {
+      $("loginView").style.display = "flex";
+      $("appView").classList.remove("show");
+      if (msg) $("loginLog").textContent = msg;
+    }
+    function showApp() {
+      $("loginView").style.display = "none";
+      $("appView").classList.add("show");
+      const name = currentAdmin ? (currentAdmin.email || currentAdmin.username) : "管理员";
+      $("adminChip").textContent = name;
+      $("adminAvatar").textContent = (name || "A").slice(0, 1).toUpperCase();
+    }
+
+    async function api(path, options = {}) {
+      const opts = { ...options };
+      const headers = authHeaders(opts.headers || {});
+      if (opts.body != null && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
+      opts.headers = headers;
+      const res = await fetch(path, opts);
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401 || res.status === 403) {
+        clearToken();
+        showLogin(data.error || "请重新登录");
+        throw new Error(data.error || "未授权");
+      }
+      if (!res.ok || data.ok === false) throw new Error(data.error || res.statusText);
+      return data;
+    }
+
+    async function loadUsers() {
+      const q = encodeURIComponent(($("q").value || "").trim());
+      const role = encodeURIComponent($("roleFilter").value || "");
+      const status = encodeURIComponent($("statusFilter").value || "");
+      const data = await api(`/api/admin/users?q=${q}&role=${role}&status=${status}&page=${page}&page_size=${pageSize}`);
+      total = data.total || 0;
+      const users = data.users || [];
+      $("pagerInfo").textContent = `共 ${total} 条 · 第 ${page} 页`;
+      if (!users.length) {
+        $("userBody").innerHTML = `<tr><td colspan="8" style="color:#94a3b8">暂无用户</td></tr>`;
+        return;
+      }
+      $("userBody").innerHTML = users.map((u) => `
+        <tr>
+          <td>${u.id}</td>
+          <td>${u.email || "-"}</td>
+          <td>${u.username || "-"}</td>
+          <td><span class="tag ${u.role === "admin" ? "tag-admin" : "tag-user"}">${u.role === "admin" ? "管理员" : "普通用户"}</span></td>
+          <td><span class="tag ${u.status === "active" ? "tag-active" : "tag-disabled"}">${u.status === "active" ? "启用" : "禁用"}</span></td>
+          <td>${u.plan || "-"}</td>
+          <td>${u.created_at || "-"}</td>
+          <td>
+            <div class="row-actions">
+              <button type="button" class="ant-btn ant-btn-default" data-edit="${u.id}">编辑</button>
+              <button type="button" class="ant-btn ant-btn-dangerous" data-del="${u.id}">删除</button>
+            </div>
+          </td>
+        </tr>
+      `).join("");
+
+      $("userBody").querySelectorAll("[data-edit]").forEach((btn) => {
+        btn.onclick = () => {
+          const u = users.find((x) => String(x.id) === btn.dataset.edit);
+          if (u) openEdit(u);
+        };
+      });
+      $("userBody").querySelectorAll("[data-del]").forEach((btn) => {
+        btn.onclick = async () => {
+          if (!confirm(`确认删除用户 #${btn.dataset.del}？`)) return;
+          try {
+            await api(`/api/admin/users/${btn.dataset.del}`, { method: "DELETE" });
+            $("appLog").textContent = "已删除";
+            $("appLog").className = "msg";
+            await loadUsers();
+          } catch (e) {
+            $("appLog").textContent = e.message;
+            $("appLog").className = "msg err";
+          }
+        };
+      });
+    }
+
+    function openEdit(user) {
+      $("editTitle").textContent = user ? "编辑用户" : "新增用户";
+      $("editId").value = user ? user.id : "";
+      $("editEmail").value = user ? (user.email || "") : "";
+      $("editUsername").value = user ? (user.username || "") : "";
+      $("editPassword").value = "";
+      $("editRole").value = user ? (user.role || "user") : "user";
+      $("editStatus").value = user ? (user.status || "active") : "active";
+      $("editPlan").value = user ? (user.plan || "free") : "free";
+      $("editLog").textContent = "";
+      $("editMask").classList.add("show");
+    }
+
+    $("btnCancel").onclick = () => { $("editMask").classList.remove("show"); };
+    $("btnCreate").onclick = () => openEdit(null);
+    $("btnSave").onclick = async () => {
+      const id = ($("editId").value || "").trim();
+      const payload = {
+        email: ($("editEmail").value || "").trim(),
+        username: ($("editUsername").value || "").trim(),
+        role: $("editRole").value,
+        status: $("editStatus").value,
+        plan: ($("editPlan").value || "free").trim(),
+      };
+      const password = $("editPassword").value || "";
+      if (!id || password) payload.password = password;
+      $("editLog").textContent = "保存中…";
+      try {
+        if (id) {
+          await api(`/api/admin/users/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+        } else {
+          if (!password) throw new Error("新增用户必须设置密码");
+          await api("/api/admin/users", { method: "POST", body: JSON.stringify(payload) });
+        }
+        $("editMask").classList.remove("show");
+        $("appLog").textContent = "已保存";
+        $("appLog").className = "msg";
+        await loadUsers();
+      } catch (e) {
+        $("editLog").textContent = e.message;
+      }
+    };
+
+    $("btnLogin").onclick = async () => {
+      $("loginLog").textContent = "登录中…";
+      $("btnLogin").disabled = true;
+      try {
+        const res = await fetch("/api/admin/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: ($("loginEmail").value || "").trim(),
+            password: $("loginPassword").value || "",
+          }),
+        }).then((r) => r.json());
+        if (!res.ok) throw new Error(res.error || "登录失败");
+        setToken(res.token);
+        currentAdmin = res.user;
+        $("loginLog").textContent = "";
+        showApp();
+        await loadUsers();
+      } catch (e) {
+        $("loginLog").textContent = e.message;
+      } finally {
+        $("btnLogin").disabled = false;
+      }
+    };
+
+    $("btnLogout").onclick = async () => {
+      try { await api("/api/admin/logout", { method: "POST", body: "{}" }); } catch (_) {}
+      clearToken();
+      showLogin("已退出登录");
+    };
+    $("btnReload").onclick = () => loadUsers().catch((e) => {
+      $("appLog").textContent = e.message;
+      $("appLog").className = "msg err";
+    });
+    $("btnSearch").onclick = () => {
+      page = 1;
+      loadUsers().catch((e) => {
+        $("appLog").textContent = e.message;
+        $("appLog").className = "msg err";
+      });
+    };
+    $("btnPrev").onclick = () => {
+      if (page <= 1) return;
+      page -= 1;
+      loadUsers().catch((e) => { $("appLog").textContent = e.message; });
+    };
+    $("btnNext").onclick = () => {
+      if (page * pageSize >= total) return;
+      page += 1;
+      loadUsers().catch((e) => { $("appLog").textContent = e.message; });
+    };
+
+    async function boot() {
+      if (!getToken()) {
+        showLogin("");
+        return;
+      }
+      try {
+        const me = await api("/api/admin/me");
+        currentAdmin = me.user;
+        showApp();
+        await loadUsers();
+      } catch (e) {
+        clearToken();
+        showLogin(e.message || "请登录");
+      }
+    }
+    boot();
+  </script>
+</body>
+</html>
