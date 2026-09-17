@@ -4,17 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import queue
 import re
 import shutil
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, request, send_file, send_from_directory
+from flask import Flask, Response, has_request_context, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
@@ -38,9 +40,12 @@ from uploader.tencent_uploader.main import (
     cookie_auth as tencent_cookie_auth,
     tencent_setup,
 )
+from web_mvp import agent_jobs as agent_store
 from web_mvp import folder_queue as folder_store
 from web_mvp import publish_history as history_store
 from web_mvp import subscriptions as sub_store
+# Douyin must run on user machine; cloud web dispatches jobs to local agent.
+AGENT_PLATFORMS = frozenset({"douyin"})
 from web_mvp.account_profile import resolve_account_profile
 from web_mvp.auth import AuthError, extract_bearer, login as auth_login
 from web_mvp.auth import admin_login as auth_admin_login
@@ -282,6 +287,206 @@ def resolve_account_file(platform: str, account_name: str) -> Path:
     account_file = Path(BASE_DIR) / "cookies" / f"{platform}_{account_name}.json"
     account_file.parent.mkdir(exist_ok=True)
     return account_file
+
+
+def _is_local_client() -> bool:
+    """True when the page/API is used from desktop (localhost), not the public cloud site."""
+    host = (request.host or "").split(":")[0].strip().lower()
+    if host in {"127.0.0.1", "localhost", "::1"}:
+        return True
+    # behind local reverse proxy
+    xff = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+    remote = (request.remote_addr or "").strip()
+    return remote in {"127.0.0.1", "::1"} or xff in {"127.0.0.1", "::1"}
+
+
+def _current_user() -> dict:
+
+    return getattr(request, "autoself_user", None) or {}
+
+
+def _try_current_user_id() -> int | None:
+    if not has_request_context():
+        return None
+    uid = int(_current_user().get("id") or 0)
+    return uid or None
+
+
+def _public_server_base() -> str:
+    env = (os.environ.get("AUTOSELF_PUBLIC_URL") or "").strip().rstrip("/")
+    if env:
+        return env
+    # Prefer public domain; request.url_root may be raw IP behind nginx.
+    return "https://autopost.com.cn"
+
+
+def _agent_server_base() -> str:
+    env = (os.environ.get("AUTOSELF_AGENT_URL") or "").strip().rstrip("/")
+    if env:
+        return env
+    # Some client networks reset HTTPS to this host; HTTP works for agent API.
+    return "http://autopost.com.cn"
+
+
+def _save_cookie_blob(platform: str, account: str, cookie: dict) -> Path:
+    path = resolve_account_file(platform, account)
+    path.write_text(json.dumps(cookie, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def _wait_agent_job(job_id: str, *, timeout_sec: float = 900) -> dict:
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        job = agent_store.get_job(job_id)
+        if not job:
+            raise RuntimeError("本机助手任务不存在")
+        status = job.get("status")
+        if status == "done":
+            return job
+        if status in {"error", "cancelled"}:
+            raise RuntimeError(job.get("error") or "本机助手任务失败")
+        time.sleep(1.0)
+    agent_store.fail_job(job_id, "等待本机助手超时")
+    raise RuntimeError("等待本机助手超时，请确认本机助手仍在运行")
+
+
+def _login_via_agent_sse(user_id: int, platform: str, account: str):
+    plat_label = PLATFORM_LABELS.get(platform, platform)
+    # 连点扫码时复用进行中的登录任务，避免取消旧任务后网页等新任务、助手仍卡在旧任务。
+    existing = agent_store.find_active_job(user_id=user_id, platform=platform, job_type="login")
+    if existing:
+        job = existing
+        job_id = job["id"]
+    else:
+        job = agent_store.create_job(
+            user_id=user_id,
+            job_type="login",
+            platform=platform,
+            account=account,
+        )
+        job_id = job["id"]
+
+    def stream():
+        last_qr = None
+        last_event_n = 0
+        yield (
+            "data: "
+            + json.dumps(
+                {
+                    "event": "status",
+                    "message": f"已派发到本机助手，正在出码…请稍候，出现二维码后再用{plat_label} App 扫",
+                    "via": "agent",
+                    "job_id": job_id,
+                },
+                ensure_ascii=False,
+            )
+            + "\n\n"
+        )
+        deadline = time.time() + 600
+        while time.time() < deadline:
+            cur = agent_store.get_job(job_id)
+            if not cur:
+                yield (
+                    "data: "
+                    + json.dumps({"event": "error", "message": "本机助手任务丢失", "via": "agent"}, ensure_ascii=False)
+                    + "\n\n"
+                )
+                return
+            qr = cur.get("qrcode")
+            if qr and qr != last_qr:
+                last_qr = qr
+                data = dict(qr)
+                hint = (data.get("hint") or "").strip()
+                if not hint:
+                    data["hint"] = f"请使用{plat_label} App 扫描二维码登录（本机助手）"
+                elif plat_label not in hint:
+                    data["hint"] = f"{plat_label} · {hint}"
+                data["platform"] = platform
+                yield (
+                    "data: "
+                    + json.dumps({"event": "qrcode", "qrcode": data, "via": "agent"}, ensure_ascii=False)
+                    + "\n\n"
+                )
+            events = cur.get("events") or []
+            while last_event_n < len(events):
+                ev = dict(events[last_event_n] or {})
+                last_event_n += 1
+                ev.setdefault("platform", platform)
+                ev.setdefault("via", "agent")
+                yield "data: " + json.dumps(ev, ensure_ascii=False) + "\n\n"
+            status = cur.get("status")
+            if status == "done":
+                result = cur.get("result") or {"success": True, "message": "登录成功"}
+                yield (
+                    "data: "
+                    + json.dumps({"event": "done", "result": result, "via": "agent"}, ensure_ascii=False)
+                    + "\n\n"
+                )
+                return
+            if status in {"error", "cancelled"}:
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {"event": "error", "message": cur.get("error") or "本机助手登录失败", "via": "agent"},
+                        ensure_ascii=False,
+                    )
+                    + "\n\n"
+                )
+                return
+            time.sleep(0.8)
+        agent_store.fail_job(job_id, "等待本机助手扫码超时")
+        yield (
+            "data: "
+            + json.dumps({"event": "error", "message": "等待本机助手超时，请确认助手仍在运行", "via": "agent"}, ensure_ascii=False)
+            + "\n\n"
+        )
+
+    return Response(stream(), mimetype="text/event-stream")
+
+
+def _publish_via_agent(
+    *,
+    user_id: int,
+    platform: str,
+    account: str,
+    video_path: Path,
+    title: str,
+    description: str,
+    tags: list[str],
+    schedule: datetime | int,
+) -> None:
+    account_file = resolve_account_file(platform, account)
+    if not account_file.exists():
+        raise RuntimeError(f"{PLATFORM_LABELS.get(platform, platform)} Cookie 不存在，请先扫码登录账号 {account}")
+    cookie = json.loads(account_file.read_text(encoding="utf-8"))
+    if not isinstance(cookie, dict):
+        raise RuntimeError("账号 Cookie 文件格式无效")
+    schedule_payload: str | int
+    if isinstance(schedule, datetime):
+        schedule_payload = schedule.strftime(SCHEDULE_FORMAT)
+    else:
+        schedule_payload = 0
+    # 发布优先：取消排队中的扫码登录，避免助手卡在别人账号的二维码上导致网页一直转圈
+    agent_store.cancel_pending_jobs(user_id=user_id, job_type="login")
+    job = agent_store.create_job(
+        user_id=user_id,
+        job_type="publish",
+        platform=platform,
+        account=account,
+        payload={
+            "title": title,
+            "description": description or title,
+            "tags": tags,
+            "schedule": schedule_payload,
+            "cookie": cookie,
+            "media_path": str(video_path.resolve()),
+            "filename": video_path.name,
+        },
+    )
+    finished = _wait_agent_job(job["id"], timeout_sec=900)
+    result = finished.get("result") or {}
+    if result.get("success") is False:
+        raise RuntimeError(result.get("message") or finished.get("error") or "本机助手发布失败")
 
 
 def parse_tags(raw_tags: str | None) -> list[str]:
@@ -527,22 +732,102 @@ def delete_account():
     return jsonify({"ok": True})
 
 
+_login_gate = threading.Lock()
+_login_busy_label = ""
+_login_cancel = threading.Event()
+_login_session_id = 0
+
+
+def _login_is_cancelled(session_id: int) -> bool:
+    return _login_cancel.is_set() or session_id != _login_session_id
+
+
 @app.get("/api/accounts/login")
 def login_account_sse():
     """SSE login for douyin/kuaishou/bilibili/tencent (QR in browser)."""
     platform = (request.args.get("platform") or "").strip()
     account = (request.args.get("account") or "").strip()
     headed = (request.args.get("headed") or "0") in ("1", "true", "yes")
+    force_cloud = (request.args.get("cloud") or "0") in ("1", "true", "yes")
     if platform not in PLATFORMS or not account:
         return jsonify({"ok": False, "error": "platform / account 必填"}), 400
+
+    user_id = _try_current_user_id()
+    # 公网抖音：优先派给在线本机助手；助手未开则提示去启动（不再开一套本地网站）
+    if (
+        not force_cloud
+        and not _is_local_client()
+        and platform in AGENT_PLATFORMS
+    ):
+        if user_id and agent_store.is_agent_online(user_id):
+            return _login_via_agent_sse(user_id, platform, account)
+        return jsonify(
+            {
+                "ok": False,
+                "error": "抖音需要本机助手（登录仍用当前网页账号）",
+                "code": "douyin_need_agent",
+                "hint": "下载并双击「本机助手」，保持运行后，再点扫码登录",
+            }
+        ), 503
+
+    if (
+        not force_cloud
+        and user_id
+        and platform in AGENT_PLATFORMS
+        and agent_store.is_agent_online(user_id)
+    ):
+        return _login_via_agent_sse(user_id, platform, account)
+
+    plat_label = PLATFORM_LABELS.get(platform, platform)
+    global _login_busy_label, _login_session_id
+
+    # 再次点扫码：取消上一路，等它释放闸门后再开新的（2G 机器仍只跑一路浏览器）
+    prev_label = _login_busy_label or "其他平台"
+    _login_cancel.set()
+    acquired = _login_gate.acquire(timeout=25)
+    if not acquired:
+        # 上一路卡住时强制夺锁，避免永远进不去
+        try:
+            if _login_gate.locked():
+                _login_gate.release()
+        except RuntimeError:
+            pass
+        _login_gate.acquire()
+
+    _login_cancel.clear()
+    _login_session_id += 1
+    session_id = _login_session_id
+    _login_busy_label = plat_label
 
     events: queue.Queue = queue.Queue()
 
     def qrcode_callback(payload: dict):
-        events.put({"event": "qrcode", "qrcode": payload})
+        if _login_is_cancelled(session_id):
+            return
+        data = dict(payload or {})
+        hint = (data.get("hint") or "").strip()
+        if not hint:
+            data["hint"] = f"请使用{plat_label} App 扫描二维码登录"
+        elif plat_label not in hint:
+            data["hint"] = f"{plat_label} · {hint}"
+        data["platform"] = platform
+        events.put({"event": "qrcode", "qrcode": data})
+
+    def event_callback(payload: dict):
+        if _login_is_cancelled(session_id):
+            return
+        data = dict(payload or {})
+        data.setdefault("platform", platform)
+        events.put(data)
+
+    def cancel_check() -> bool:
+        return _login_is_cancelled(session_id)
 
     def worker():
         try:
+            if cancel_check():
+                events.put({"event": "error", "message": "登录已取消"})
+                return
             account_file = str(resolve_account_file(platform, account))
             headless = not headed
             if platform == "douyin":
@@ -552,6 +837,8 @@ def login_account_sse():
                         handle=True,
                         return_detail=True,
                         qrcode_callback=qrcode_callback,
+                        event_callback=event_callback,
+                        cancel_check=cancel_check,
                         headless=headless,
                     )
                 )
@@ -562,6 +849,7 @@ def login_account_sse():
                         handle=True,
                         return_detail=True,
                         qrcode_callback=qrcode_callback,
+                        cancel_check=cancel_check,
                         headless=headless,
                     )
                 )
@@ -574,38 +862,371 @@ def login_account_sse():
                 result = bili_qr_login.bilibili_qr_login(
                     account_file,
                     qrcode_callback=qrcode_callback,
+                    cancel_check=cancel_check,
                 )
             elif platform == "tencent":
-                # Web UI shows the QR; keep browser headless (no popup Chrome window).
                 result = _run_async(
                     tencent_setup(
                         account_file,
                         handle=True,
                         return_detail=True,
                         qrcode_callback=qrcode_callback,
+                        cancel_check=cancel_check,
                         headless=True,
                     )
                 )
             else:
                 raise ValueError(f"不支持的平台: {platform}")
+            if cancel_check():
+                events.put({"event": "error", "message": f"已取消上一轮「{prev_label}」登录，开始新的扫码"})
+                return
             events.put({"event": "done", "result": result})
         except Exception as exc:
-            events.put({"event": "error", "message": str(exc)})
+            if cancel_check():
+                events.put({"event": "error", "message": "登录已取消"})
+            else:
+                events.put({"event": "error", "message": str(exc)})
 
     threading.Thread(target=worker, daemon=True).start()
 
     def stream():
-        while True:
+        global _login_busy_label
+        try:
+            while True:
+                try:
+                    item = events.get(timeout=1)
+                except queue.Empty:
+                    if cancel_check():
+                        yield f"data: {json.dumps({'event': 'error', 'message': '登录已被新的扫码替换'}, ensure_ascii=False)}\n\n"
+                        break
+                    continue
+                yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+                if item.get("event") in ("done", "error"):
+                    break
+        finally:
+            if session_id == _login_session_id:
+                _login_busy_label = ""
             try:
-                item = events.get(timeout=300)
-            except queue.Empty:
-                yield f"data: {json.dumps({'event': 'error', 'message': '登录超时'}, ensure_ascii=False)}\n\n"
-                break
-            yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
-            if item.get("event") in ("done", "error"):
-                break
+                _login_gate.release()
+            except RuntimeError:
+                pass
 
     return Response(stream(), mimetype="text/event-stream")
+
+
+
+@app.post("/api/accounts/cookie")
+def upload_account_cookie():
+    """Upload a Playwright storage_state / cookie JSON for a platform account."""
+    platform = (request.form.get("platform") or request.args.get("platform") or "").strip()
+    account = (request.form.get("account") or request.args.get("account") or "").strip()
+    if platform not in PLATFORMS or not account:
+        return jsonify({"ok": False, "error": "platform / account 必填"}), 400
+    if "file" not in request.files:
+        return jsonify({"ok": False, "error": "请选择 Cookie JSON 文件"}), 400
+    raw = request.files["file"].read()
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return jsonify({"ok": False, "error": "文件不是合法 JSON"}), 400
+    if not isinstance(data, dict) or not isinstance(data.get("cookies"), list):
+        return jsonify({"ok": False, "error": "需要 Playwright storage_state 格式（含 cookies 数组）"}), 400
+    names = {str(c.get("name") or "") for c in data.get("cookies") or []}
+    if platform == "douyin" and not (names & {"sessionid", "sessionid_ss", "sid_tt", "sid_guard"}):
+        return jsonify({"ok": False, "error": "抖音 Cookie 缺少 sessionid，请重新在本机导出后再上传"}), 400
+    path = resolve_account_file(platform, account)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # light validate for douyin
+    valid = None
+    if platform == "douyin":
+        try:
+            valid = bool(_run_async(douyin_cookie_auth(str(path))))
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"已保存但校验失败：{exc}", "path": str(path)}), 400
+        if not valid:
+            return jsonify({"ok": False, "error": "Cookie 已保存但已失效，请重新在本机登录导出", "path": str(path)}), 400
+    return jsonify({"ok": True, "path": str(path), "valid": valid if valid is not None else True})
+
+
+@app.post("/api/accounts/verify-code")
+def submit_login_verify_code():
+    """Submit SMS / secondary verify code for an in-progress platform login."""
+    data = request.get_json(force=True, silent=True) or {}
+    platform = (data.get("platform") or request.args.get("platform") or "").strip()
+    account = (data.get("account") or request.args.get("account") or "").strip()
+    code = str(data.get("code") or "").strip()
+    if platform not in PLATFORMS or not account:
+        return jsonify({"ok": False, "error": "platform / account 必填"}), 400
+    if not code:
+        return jsonify({"ok": False, "error": "验证码不能为空"}), 400
+    account_file = resolve_account_file(platform, account)
+    code_path = account_file.with_name(f"{account_file.stem}_verify_code.txt")
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    code_path.write_text(code, encoding="utf-8")
+    # 本机助手登录时，同步写入任务，供助手拉到本地填入
+    user_id = _try_current_user_id()
+    via_agent = False
+    if user_id:
+        job = agent_store.find_active_job(
+            user_id=user_id,
+            platform=platform,
+            account=account,
+            job_type="login",
+        )
+        if job:
+            agent_store.set_job_verify_code(job["id"], code)
+            via_agent = True
+    return jsonify({"ok": True, "via_agent": via_agent})
+
+
+@app.get("/api/agent/status")
+@app.post("/api/agent/status")
+def api_agent_status():
+    user_id = _try_current_user_id()
+    if not user_id:
+        return jsonify({"ok": False, "error": "未登录"}), 401
+    status = agent_store.agent_status(user_id)
+    status["ok"] = True
+    return jsonify(status)
+
+
+@app.get("/api/agent/bootstrap")
+def api_agent_bootstrap():
+    """One-command local agent start helper for the current user."""
+    user_id = _try_current_user_id()
+    if not user_id:
+        return jsonify({"ok": False, "error": "未登录"}), 401
+    token = extract_bearer(request.headers.get("Authorization")) or (request.args.get("token") or "").strip()
+    if not token:
+        return jsonify({"ok": False, "error": "缺少 token"}), 400
+    server = _agent_server_base()
+    command = (
+        "mkdir -p ~/.autoself && "
+        f"printf '%s' '{token}' > ~/.autoself/token && "
+        f"python -m web_mvp.local_agent --server {server}"
+    )
+    return jsonify(
+        {
+            "ok": True,
+            "server": server,
+            "token": token,
+            "command": command,
+            "hint": "下载本机助手包后双击即可，无需再登录另一套系统。",
+            "package_mac": "/api/agent/package/mac",
+            "package_win": "/api/agent/package/win",
+        }
+    )
+
+
+@app.get("/api/agent/package/<os_name>")
+def api_agent_package(os_name: str):
+    """Download a per-user agent zip (token baked in). Double-click to connect to cloud."""
+    import io
+    import zipfile
+
+    user_id = _try_current_user_id()
+    if not user_id:
+        return jsonify({"ok": False, "error": "未登录"}), 401
+    token = extract_bearer(request.headers.get("Authorization")) or (request.args.get("token") or "").strip()
+    if not token:
+        return jsonify({"ok": False, "error": "缺少 token"}), 400
+    server = _agent_server_base()
+    os_name = (os_name or "").strip().lower()
+    if os_name not in {"mac", "win", "windows"}:
+        return jsonify({"ok": False, "error": "os 仅支持 mac/win"}), 400
+    if os_name == "windows":
+        os_name = "win"
+
+    buf = io.BytesIO()
+    static_desktop = STATIC_DIR / "desktop"
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        # connection files
+        zf.writestr(
+            "autoself-agent/config.json",
+            json.dumps({"server": server, "token": token}, ensure_ascii=False, indent=2),
+        )
+        zf.writestr("autoself-agent/token", token + "\n")
+        zf.writestr("autoself-agent/server", server + "\n")
+        if os_name == "mac":
+            # launcher .app (no Terminal); bake credentials into Resources
+            app_root = static_desktop / "mac" / "AutoSelf.app"
+            for path in app_root.rglob("*"):
+                if path.is_file():
+                    arc = "autoself-agent/AutoSelf助手.app/" + str(path.relative_to(app_root))
+                    zf.write(path, arcname=arc)
+            zf.writestr("autoself-agent/AutoSelf助手.app/Contents/Resources/token", token + "\n")
+            zf.writestr("autoself-agent/AutoSelf助手.app/Contents/Resources/server", server + "\n")
+            zf.writestr(
+                "autoself-agent/AutoSelf助手.app/Contents/Resources/config.json",
+                json.dumps({"server": server, "token": token}, ensure_ascii=False, indent=2),
+            )
+            install = """#!/bin/bash
+cd "$(dirname "$0")"
+mkdir -p "$HOME/.autoself"
+cp -f token "$HOME/.autoself/token" 2>/dev/null || true
+cp -f server "$HOME/.autoself/server" 2>/dev/null || true
+cp -f config.json "$HOME/.autoself/config.json" 2>/dev/null || true
+xattr -cr "AutoSelf助手.app" 2>/dev/null || true
+open "AutoSelf助手.app"
+/usr/bin/osascript >/dev/null 2>&1 <<'AS' &
+tell application "Terminal"
+  try
+    close (every window whose name contains "双击启动" or name contains "autoself-agent") saving no
+  end try
+end tell
+AS
+exit 0
+"""
+            info = zipfile.ZipInfo("autoself-agent/双击启动本机助手.command")
+            info.date_time = (2026, 1, 1, 0, 0, 0)
+            info.create_system = 3  # Unix
+            info.external_attr = 0o755 << 16
+            zf.writestr(info, install)
+            zf.writestr(
+                "autoself-agent/说明.txt",
+                "请只双击「AutoSelf助手」图标启动（不会弹出终端）。\n"
+                "不要双击「双击启动本机助手.command」（那会打开终端窗口）。\n"
+                "若系统拦截：右键图标 → 打开。\n"
+                "看到右上角通知后，回网页点「我已启动，重新检测」。\n",
+            )
+        else:
+            vbs_src = static_desktop / "win" / "启动AutoSelf.vbs"
+            if vbs_src.exists():
+                zf.write(vbs_src, arcname="autoself-agent/启动本机助手.vbs")
+            install_bat = (
+                "@echo off\r\n"
+                "cd /d \"%~dp0\"\r\n"
+                "start \"\" wscript \"%~dp0启动本机助手.vbs\"\r\n"
+            )
+            zf.writestr("autoself-agent/双击启动本机助手.bat", install_bat)
+            zf.writestr(
+                "autoself-agent/说明.txt",
+                "推荐：双击「启动本机助手.vbs」（无黑窗口，后台运行）。\n"
+                "也可双击「双击启动本机助手.bat」。\n"
+                "弹出提示后回网页点「我已启动，重新检测」。\n",
+            )
+
+    data = buf.getvalue()
+    filename = f"AutoSelf-agent-{os_name}.zip"
+    return Response(
+        data,
+        mimetype="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/agent/heartbeat")
+def api_agent_heartbeat():
+    user_id = _try_current_user_id()
+    if not user_id:
+        return jsonify({"ok": False, "error": "未登录"}), 401
+    data = request.get_json(force=True, silent=True) or {}
+    agent_id = str(data.get("agent_id") or "").strip()
+    if not agent_id:
+        return jsonify({"ok": False, "error": "agent_id 必填"}), 400
+    label = str(data.get("label") or "本机助手").strip() or "本机助手"
+    entry = agent_store.heartbeat(user_id=user_id, agent_id=agent_id, label=label)
+    return jsonify({"ok": True, "agent": entry})
+
+
+@app.get("/api/agent/jobs/next")
+@app.post("/api/agent/jobs/next")
+def api_agent_next_job():
+    user_id = _try_current_user_id()
+    if not user_id:
+        return jsonify({"ok": False, "error": "未登录"}), 401
+    data = request.get_json(force=True, silent=True) or {}
+    agent_id = (request.args.get("agent_id") or data.get("agent_id") or "").strip()
+    if not agent_id:
+        return jsonify({"ok": False, "error": "agent_id 必填"}), 400
+    # refresh presence on poll
+    agent_store.heartbeat(user_id=user_id, agent_id=agent_id)
+    job = agent_store.claim_next_job(user_id=user_id, agent_id=agent_id)
+    return jsonify({"ok": True, "job": job})
+
+
+def _require_owned_job(job_id: str) -> tuple[dict | None, tuple | None]:
+    user_id = _try_current_user_id()
+    if not user_id:
+        return None, (jsonify({"ok": False, "error": "未登录"}), 401)
+    job = agent_store.get_job(job_id)
+    if not job or int(job.get("user_id") or 0) != int(user_id):
+        return None, (jsonify({"ok": False, "error": "任务不存在"}), 404)
+    return job, None
+
+
+@app.get("/api/agent/jobs/<job_id>")
+@app.post("/api/agent/jobs/<job_id>")
+def api_agent_get_job(job_id: str):
+    job, err = _require_owned_job(job_id)
+    if err:
+        return err
+    return jsonify({"ok": True, "job": job})
+
+
+@app.post("/api/agent/jobs/<job_id>/qrcode")
+def api_agent_job_qrcode(job_id: str):
+    job, err = _require_owned_job(job_id)
+    if err:
+        return err
+    data = request.get_json(force=True, silent=True) or {}
+    qrcode = data.get("qrcode")
+    if not isinstance(qrcode, dict):
+        return jsonify({"ok": False, "error": "qrcode 必填"}), 400
+    updated = agent_store.set_job_qrcode(job_id, qrcode)
+    return jsonify({"ok": True, "job": updated})
+
+
+@app.post("/api/agent/jobs/<job_id>/event")
+def api_agent_job_event(job_id: str):
+    job, err = _require_owned_job(job_id)
+    if err:
+        return err
+    data = request.get_json(force=True, silent=True) or {}
+    updated = agent_store.append_job_event(job_id, data)
+    return jsonify({"ok": True, "job": updated})
+
+
+@app.post("/api/agent/jobs/<job_id>/complete")
+def api_agent_job_complete(job_id: str):
+    job, err = _require_owned_job(job_id)
+    if err:
+        return err
+    data = request.get_json(force=True, silent=True) or {}
+    result = data.get("result") if isinstance(data.get("result"), dict) else {}
+    cookie = result.get("cookie")
+    if job.get("type") == "login" and isinstance(cookie, dict):
+        _save_cookie_blob(job["platform"], job["account"], cookie)
+        # avoid persisting full cookie blob in job history
+        result = {k: v for k, v in result.items() if k != "cookie"}
+        result.setdefault("success", True)
+        result.setdefault("message", "登录成功")
+    updated = agent_store.complete_job(job_id, result)
+    return jsonify({"ok": True, "job": updated})
+
+
+@app.post("/api/agent/jobs/<job_id>/fail")
+def api_agent_job_fail(job_id: str):
+    job, err = _require_owned_job(job_id)
+    if err:
+        return err
+    data = request.get_json(force=True, silent=True) or {}
+    error = str(data.get("error") or "本机助手任务失败")
+    updated = agent_store.fail_job(job_id, error)
+    return jsonify({"ok": True, "job": updated})
+
+
+@app.get("/api/agent/jobs/<job_id>/media")
+@app.post("/api/agent/jobs/<job_id>/media")
+def api_agent_job_media(job_id: str):
+    # POST 优先：部分网络会劫持 HTTP GET 到备案拦截页 HTML。
+    job, err = _require_owned_job(job_id)
+    if err:
+        return err
+    media_path = Path(str((job.get("payload") or {}).get("media_path") or ""))
+    if not media_path.is_file():
+        return jsonify({"ok": False, "error": "媒体文件不存在"}), 404
+    return send_file(media_path, as_attachment=True, download_name=media_path.name)
 
 
 @app.post("/api/media/upload")
@@ -767,6 +1388,9 @@ def _publish_bilibili(account: str, video_path: Path, title: str, description: s
     account_file = resolve_account_file("bilibili", account)
     if not account_file.exists():
         raise RuntimeError(f"B站账号文件不存在，请先在网页扫码登录账号 {account}")
+    from uploader.bilibili_uploader.qr_login import ensure_biliup_login_info
+
+    ensure_biliup_login_info(account_file)
     arguments = [
         "-u",
         str(account_file),
@@ -826,6 +1450,23 @@ def _publish_to_platform(
     schedule: datetime | int = 0,
 ) -> None:
     tags = tags or []
+    user_id = _try_current_user_id()
+    if (
+        user_id
+        and platform in AGENT_PLATFORMS
+        and agent_store.is_agent_online(user_id)
+    ):
+        _publish_via_agent(
+            user_id=user_id,
+            platform=platform,
+            account=account,
+            video_path=video_path,
+            title=title,
+            description=description,
+            tags=tags,
+            schedule=schedule,
+        )
+        return
     if platform == "douyin":
         _run_async(_publish_douyin(account, video_path, title, description, tags, schedule))
     elif platform == "kuaishou":
@@ -840,6 +1481,11 @@ def _publish_to_platform(
 
 sub_store.set_publish_fn(_publish_to_platform)
 folder_store.set_publish_fn(_publish_to_platform)
+# Start daily schedulers in the worker process (has publish_fn). Only instance
+# autoself@5410 sets AUTOSELF_ENABLE_SCHEDULERS=1 so we don't double-run.
+if os.environ.get("AUTOSELF_ENABLE_SCHEDULERS", "0") == "1":
+    sub_store.start_scheduler()
+    folder_store.start_scheduler()
 
 
 @app.post("/api/publish")

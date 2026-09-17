@@ -365,10 +365,14 @@
           <option value="tencent">微信视频号</option>
         </select>
         <button id="btnLogin">扫码登录</button>
+        <button class="secondary" id="btnUploadCookie">上传 Cookie</button>
+        <input id="cookieFile" type="file" accept="application/json,.json" style="display:none" />
         <button class="secondary" id="btnRefresh">刷新列表</button>
         <button class="secondary" id="btnCheckAll">校验 Cookie</button>
       </div>
-      <div id="qrcodeBox" class="muted">登录二维码会显示在这里（抖音 / 快手 / B站 / 微信视频号均可扫码）</div>
+      <p id="agentStatus" class="muted" style="margin:8px 0 0">正在检测本机助手…</p>
+      <p class="muted" style="margin:6px 0 0">快手 / B站 / 视频号可直接网页扫码。抖音需本机助手（仍用当前网页账号，不会另起一套系统）。</p>
+      <div id="qrcodeBox" class="muted">登录二维码会显示在这里</div>
       <table>
         <thead>
           <tr><th>平台</th><th>平台账号</th><th>状态</th><th></th></tr>
@@ -417,7 +421,7 @@
 
     <section class="card">
       <h2>3. 贴链接下载 / 上传</h2>
-      <p class="muted" style="margin:0 0 10px">抖音下载会自动使用已绑定账号的 Cookie；若失败请先重新扫码登录抖音。</p>
+      <p class="muted" style="margin:0 0 10px">抖音下载会用已绑定 Cookie；若失效请开本机助手后重新扫码。</p>
       <div class="row">
         <label>分享内容</label>
         <textarea id="shareText" placeholder="粘贴抖音 / 快手 / B站分享文案或链接"></textarea>
@@ -556,6 +560,28 @@
       $("appMain").style.display = "block";
     }
 
+    function friendlyNetworkError(err) {
+      const msg = String((err && err.message) || err || "");
+      if (/failed to fetch|networkerror|load failed|network request failed/i.test(msg)) {
+        return "网络波动，请再点一次「刷新列表」";
+      }
+      return msg || "请求失败";
+    }
+
+    async function fetchWithRetry(url, options = {}, { retries = 2, delayMs = 400 } = {}) {
+      let lastErr;
+      for (let i = 0; i <= retries; i++) {
+        try {
+          return await fetch(url, options);
+        } catch (err) {
+          lastErr = err;
+          if (i >= retries) break;
+          await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
+        }
+      }
+      throw new Error(friendlyNetworkError(lastErr));
+    }
+
     async function api(path, options = {}) {
       const opts = { ...options };
       const headers = authHeaders(opts.headers || {});
@@ -563,7 +589,7 @@
         headers["Content-Type"] = "application/json";
       }
       opts.headers = headers;
-      const res = await fetch(path, opts);
+      const res = await fetchWithRetry(path, opts);
       const data = await res.json().catch(() => ({}));
       if (res.status === 401) {
         clearSession();
@@ -577,7 +603,7 @@
     }
 
     async function authRequest(path, body) {
-      const res = await fetch(path, {
+      const res = await fetchWithRetry(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -653,6 +679,7 @@
           });
         }
         setSession(data.token, data.user);
+        refreshAgentStatus().catch(() => {});
         $("authLog").textContent = "成功";
         showApp();
         await bootApp();
@@ -778,27 +805,196 @@
       return "acc_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
     }
 
-    function startLogin(platform, account) {
-      $("qrcodeBox").textContent = "正在发起登录…";
+
+    let activeLoginEs = null;
+
+
+    function detectDesktopOs() {
+      const ua = (navigator.userAgent || "").toLowerCase();
+      return ua.includes("windows") ? "win" : "mac";
+    }
+
+    async function downloadAgentPackage(osName) {
+      const token = getToken();
+      if (!token) throw new Error("请先登录网页账号");
+      const res = await fetch(`/api/agent/package/${osName}?token=${encodeURIComponent(token)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        let msg = "下载失败";
+        try {
+          const data = await res.json();
+          msg = data.error || msg;
+        } catch (_) {}
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `AutoSelf-agent-${osName}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    }
+
+    async function refreshAgentStatus() {
+      const el = $("agentStatus");
+      if (!el) return;
+      if (!getToken()) {
+        el.textContent = "登录后可连接本机助手（抖音需要）";
+        return;
+      }
+      try {
+        const data = await api("/api/agent/status", { method: "POST", body: "{}" });
+        if (data.online) {
+          el.innerHTML = `<span class="ok">本机助手在线</span> · 抖音扫码/发布将在本机执行，账号仍是云端账号`;
+        } else {
+          el.innerHTML = `本机助手未连接 · <button type="button" class="secondary" id="btnDlAgentTop">下载本机助手</button>`;
+          const btn = $("btnDlAgentTop");
+          if (btn) btn.onclick = () => downloadAgentPackage(detectDesktopOs()).catch((e) => alert(e.message || e));
+        }
+      } catch (_) {
+        el.innerHTML = `<span class="muted">助手状态暂时获取失败（可忽略）· 若刚启动过，直接点扫码即可</span>`;
+      }
+    }
+
+    function showDouyinAgentGuide() {
+      const os = detectDesktopOs();
+      const label = os === "win" ? "下载 Windows 本机助手" : "下载 Mac 本机助手";
+      $("qrcodeBox").innerHTML = `
+        <div><b>抖音需要本机助手</b></div>
+        <div class="muted" style="margin-top:6px">网页账号不变。助手只在你电脑上帮你完成抖音扫码/发布，不使用本机数据库。</div>
+        <div style="margin-top:12px;display:flex;flex-direction:column;gap:10px;max-width:420px">
+          <button type="button" id="btnDlAgent" style="padding:12px 16px;background:#1f6feb;color:#fff;border:0;border-radius:8px;font-weight:600">${label}</button>
+          <button type="button" class="secondary" id="btnRecheckAgent">我已启动，重新检测</button>
+        </div>
+        <ol class="muted" style="margin:14px 0 0;padding-left:18px;line-height:1.7">
+          <li>下载压缩包并解压</li>
+          <li>Mac 双击「AutoSelf助手」图标（不要点 .command）；Windows 双击「启动本机助手.vbs」</li>
+          <li>看到「本机助手在线」后，再点抖音扫码</li>
+        </ol>`;
+      const dl = $("btnDlAgent");
+      if (dl) {
+        dl.onclick = async () => {
+          dl.disabled = true;
+          dl.textContent = "下载中…";
+          try {
+            await downloadAgentPackage(os);
+            dl.textContent = "已下载，请解压后双击助手图标";
+          } catch (e) {
+            alert(e.message || e);
+            dl.textContent = label;
+          } finally {
+            dl.disabled = false;
+          }
+        };
+      }
+      const re = $("btnRecheckAgent");
+      if (re) {
+        re.onclick = async () => {
+          await refreshAgentStatus();
+          try {
+            const data = await api("/api/agent/status", { method: "POST", body: "{}" });
+            if (data.online) {
+              $("qrcodeBox").innerHTML = `<span class="ok">本机助手已在线</span><div class="muted" style="margin-top:8px">请再点一次「扫码登录」</div>`;
+            } else {
+              alert("还检测不到助手，请确认已双击启动（后台运行即可，无需开着终端）");
+            }
+          } catch (e) {
+            alert(e.message || e);
+          }
+        };
+      }
+    }
+
+    async function startLogin(platform, account) {
+
+      const platLabel = PLATFORM_LABEL[platform] || platform;
+      // 同时只保留一路扫码：关掉旧 SSE，避免抖音/快手二维码互相覆盖
+      if (activeLoginEs) {
+        try { activeLoginEs.close(); } catch (_) {}
+        activeLoginEs = null;
+      }
+      if (platform === "douyin") {
+        try {
+          const st = await api("/api/agent/status", { method: "POST", body: "{}" });
+          if (!st.online) {
+            showDouyinAgentGuide();
+            return;
+          }
+        } catch (_) {
+          // 状态接口偶发失败时仍尝试派发；后端会在助手离线时返回明确错误
+        }
+      }
+      $("qrcodeBox").innerHTML = platform === "douyin"
+        ? `<div><b>正在登录：${platLabel}</b></div><div class="muted">本机助手正在出码，请稍候（通常几秒）；出现二维码后用抖音 App 扫一次即可</div>`
+        : `<div><b>正在登录：${platLabel}</b></div><div class="muted">请只扫这一次二维码；不要连续点多个平台</div>`;
       const es = new EventSource(`/api/accounts/login?platform=${encodeURIComponent(platform)}&account=${encodeURIComponent(account)}&token=${encodeURIComponent(getToken())}`);
+      activeLoginEs = es;
       es.onmessage = (ev) => {
+        if (activeLoginEs !== es) return;
         const data = JSON.parse(ev.data);
         if (data.event === "qrcode") {
           const url = data.qrcode && (data.qrcode.image_data_url || "");
-          const hint = (data.qrcode && data.qrcode.hint) || "请用对应 App 扫码：";
+          const hint = (data.qrcode && data.qrcode.hint) || `请用${platLabel} App 扫码：`;
           if (url) {
-            $("qrcodeBox").innerHTML = `<div>${hint}</div><img src="${url}" alt="qrcode" />`;
+            $("qrcodeBox").innerHTML = `<div><b>${platLabel}</b> · ${hint}</div><img src="${url}" alt="qrcode" />`;
           } else if (data.qrcode && data.qrcode.image_path) {
-            $("qrcodeBox").textContent = `二维码已生成：${data.qrcode.image_path}（请打开该文件扫码）`;
+            $("qrcodeBox").innerHTML = `<div><b>${platLabel}</b></div><div>二维码已生成：${data.qrcode.image_path}（请打开该文件扫码）</div>`;
           } else {
             $("qrcodeBox").textContent = "等待二维码…若长时间无图，可改用有头浏览器登录";
           }
+        } else if (data.event === "status") {
+          const msg = data.message || "";
+          const box = $("qrcodeBox");
+          if (box && msg) {
+            let tip = box.querySelector(".login-status-tip");
+            if (!tip) {
+              tip = document.createElement("div");
+              tip.className = "login-status-tip muted";
+              tip.style.marginTop = "8px";
+              box.appendChild(tip);
+            }
+            tip.textContent = msg;
+          }
+        } else if (data.event === "need_verify") {
+          const msg = data.message || "请输入验证码";
+          if (data.kind === "captcha") {
+            $("qrcodeBox").innerHTML = `<div class="bad"><b>${platLabel}</b> · ${msg}</div>`;
+          } else {
+            $("qrcodeBox").innerHTML = `
+              <div><b>${platLabel}</b> · ${msg}</div>
+              <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+                <input id="loginVerifyCode" placeholder="短信验证码" style="flex:1;padding:8px" />
+                <button id="btnLoginVerify" type="button">提交验证码</button>
+              </div>`;
+            const btn = $("btnLoginVerify");
+            if (btn) {
+              btn.onclick = async () => {
+                const code = ($("loginVerifyCode").value || "").trim();
+                if (!code) { alert("请输入验证码"); return; }
+                btn.disabled = true;
+                try {
+                  await api("/api/accounts/verify-code", {
+                    method: "POST",
+                    body: JSON.stringify({ platform, account, code }),
+                  });
+                  $("qrcodeBox").innerHTML += `<div class="ok">验证码已提交，正在继续登录…</div>`;
+                } catch (e) {
+                  btn.disabled = false;
+                  alert(e.message || e);
+                }
+              };
+            }
+          }
         } else if (data.event === "done") {
           es.close();
+          if (activeLoginEs === es) activeLoginEs = null;
           const ok = data.result && data.result.success;
           $("qrcodeBox").innerHTML = ok
-            ? `<span class="ok">登录成功</span>`
-            : `<span class="bad">登录结束：${(data.result && data.result.message) || "未知"}</span>`;
+            ? `<span class="ok">${platLabel} 登录成功</span>`
+            : `<span class="bad">${platLabel} 登录结束：${(data.result && data.result.message) || "未知"}</span>`;
           // 登录后立刻刷列表拿昵称；不做全量 Cookie 校验（会卡住，列表刷不出来）
           refreshAccounts(false, true)
             .catch((e) => {
@@ -806,10 +1002,18 @@
             });
         } else if (data.event === "error") {
           es.close();
-          $("qrcodeBox").innerHTML = `<span class="bad">${data.message || "登录失败"}</span>`;
+          if (activeLoginEs === es) activeLoginEs = null;
+          let msg = data.message || "登录失败";
+          if (msg.includes("机房") || msg.includes("上传 Cookie")) {
+            msg = "登录未完成，请再点一次扫码；确认本机助手仍在后台运行。";
+          }
+          $("qrcodeBox").innerHTML = `<span class="bad">${platLabel}：${msg}</span>`;
         }
       };
-      es.onerror = () => { es.close(); };
+      es.onerror = () => {
+        es.close();
+        if (activeLoginEs === es) activeLoginEs = null;
+      };
     }
 
     async function refreshAccounts(check = false, refreshProfile = false) {
@@ -827,7 +1031,8 @@
           let cls = "muted";
           if (a.valid === true) { status = "有效"; cls = "ok"; }
           if (a.valid === false) { status = "失效"; cls = "bad"; }
-          const display = a.display_name || "未获取到昵称";
+          let display = a.display_name || a.account || "未获取到昵称";
+          if (/^acc_/.test(display)) display = "未获取到昵称";
           return `<tr>
             <td>${PLATFORM_LABEL[a.platform] || a.label || a.platform}</td>
             <td><strong>${display}</strong></td>
@@ -895,13 +1100,13 @@
       body.querySelectorAll("[data-run]").forEach((btn) => {
         btn.onclick = async () => {
           const id = btn.dataset.run;
-          $("subLog").textContent = "正在执行订阅（拉最新 → 下载 → 上传）…";
+          $("subLog").textContent = "正在执行订阅（拉最新 → 下载/合成 → 上传）。图文配乐可能要 1～2 分钟，请稍候…";
           btn.disabled = true;
           try {
             const res = await fetch(`/api/subscriptions/${id}/run`, {
               method: "POST",
               headers: authHeaders({ "Content-Type": "application/json" }),
-              body: JSON.stringify({ force: false }),
+              body: JSON.stringify({ force: true }),
             }).then((r) => r.json());
             if (!res.ok) throw new Error(res.error || "执行失败");
             $("subLog").textContent = res.skipped
@@ -947,9 +1152,44 @@
     $("btnHeaderRefresh").onclick = () => $("btnRefresh").click();
     $("btnHeaderCheck").onclick = () => $("btnCheckAll").click();
 
+    function syncLoginButtonLabel() {
+      const platform = $("loginPlatform").value;
+      const btn = $("btnLogin");
+      if (!btn) return;
+      btn.textContent = platform === "douyin" ? "抖音扫码（需本机助手）" : "扫码登录";
+    }
+    $("loginPlatform").onchange = syncLoginButtonLabel;
+    syncLoginButtonLabel();
+
     $("btnLogin").onclick = () => {
       const platform = $("loginPlatform").value;
       startLogin(platform, newLocalAccountId());
+    };
+
+    $("btnUploadCookie").onclick = () => $("cookieFile").click();
+    $("cookieFile").onchange = async () => {
+      const file = $("cookieFile").files && $("cookieFile").files[0];
+      $("cookieFile").value = "";
+      if (!file) return;
+      const platform = $("loginPlatform").value;
+      const account = newLocalAccountId();
+      const platLabel = PLATFORM_LABEL[platform] || platform;
+      $("qrcodeBox").innerHTML = `<div class="muted">${platLabel} · 正在上传并校验 Cookie…</div>`;
+      const fd = new FormData();
+      fd.append("platform", platform);
+      fd.append("account", account);
+      fd.append("file", file);
+      try {
+        const headers = authHeaders();
+        // Let browser set multipart boundary; do not force JSON content-type.
+        const res = await fetch("/api/accounts/cookie", { method: "POST", headers, body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.ok === false) throw new Error(data.error || res.statusText);
+        $("qrcodeBox").innerHTML = `<span class="ok">${platLabel} Cookie 导入成功</span>`;
+        await refreshAccounts(false, true);
+      } catch (e) {
+        $("qrcodeBox").innerHTML = `<span class="bad">${platLabel} Cookie 导入失败：${e.message || e}</span>`;
+      }
     };
 
     $("btnDownload").onclick = async () => {
@@ -1015,15 +1255,16 @@
           headers: authHeaders(),
           body: fd,
         }).then((r) => r.json());
-        if (!res.ok && !(res.results || []).some((x) => x.ok)) {
-          throw new Error(res.error || "上传或发布失败");
-        }
         const lines = (res.results || []).map((r) => {
           const plat = PLATFORM_LABEL[r.platform] || r.platform;
           return r.ok
             ? `✓ ${plat} / ${r.account}`
             : `✗ ${plat} / ${r.account}：${r.error || "失败"}`;
         });
+        if (!res.ok && !(res.results || []).some((x) => x.ok)) {
+          const detail = lines.join("\n") || res.error || "上传或发布失败";
+          throw new Error(detail);
+        }
         const tagLine = (res.tags || []).length
           ? `\n标签：${(res.tags || []).map((t) => "#" + t).join(" ")}`
           : "";
@@ -1323,15 +1564,21 @@
       await Promise.all([
         loadBiliPartitions().catch((e) => console.warn("加载B站分区失败", e)),
         refreshAccounts().catch((e) => {
-          $("accountBody").innerHTML = `<tr><td colspan="4" class="bad">${e.message}</td></tr>`;
+          $("accountBody").innerHTML = `<tr><td colspan="4" class="bad">${friendlyNetworkError(e)}</td></tr>`;
         }),
         refreshSubscriptions().catch((e) => {
-          $("subBody").innerHTML = `<tr><td colspan="5" class="bad">${e.message}</td></tr>`;
+          $("subBody").innerHTML = `<tr><td colspan="5" class="bad">${friendlyNetworkError(e)}</td></tr>`;
         }),
         refreshFolderQueues().catch((e) => {
-          $("fqList").innerHTML = `<p class="bad">${e.message}</p>`;
+          $("fqList").innerHTML = `<p class="bad">${friendlyNetworkError(e)}</p>`;
         }),
+        refreshAgentStatus().catch(() => {}),
       ]);
+      if (!window.__agentStatusTimer) {
+        window.__agentStatusTimer = setInterval(() => {
+          refreshAgentStatus().catch(() => {});
+        }, 15000);
+      }
     }
 
     async function boot() {

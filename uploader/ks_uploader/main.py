@@ -37,7 +37,7 @@ KUAISHOU_COOKIE_INVALID_SELECTOR = "div.names div.container div.name:text('机�
 KUAISHOU_PUBLISH_STRATEGY_IMMEDIATE = "immediate"
 KUAISHOU_PUBLISH_STRATEGY_SCHEDULED = "scheduled"
 KUAISHOU_UPLOAD_TIMEOUT_SECONDS = 480
-KUAISHOU_PUBLISH_ATTEMPTS = 6
+KUAISHOU_PUBLISH_ATTEMPTS = 5
 KUAISHOU_PUBLISH_NAV_TIMEOUT_MS = 15000
 
 
@@ -491,14 +491,14 @@ async def cookie_auth(account_file):
             await browser.close()
 
 
-async def ks_setup(account_file, handle=False, return_detail=False, qrcode_callback=None, headless: bool = LOCAL_CHROME_HEADLESS, cdp_url: str | None = None):
+async def ks_setup(account_file, handle=False, return_detail=False, qrcode_callback=None, cancel_check=None, headless: bool = LOCAL_CHROME_HEADLESS, cdp_url: str | None = None):
     account_file = get_absolute_path(account_file, "ks_uploader")
     if not os.path.exists(account_file) or not await cookie_auth(account_file):
         if not handle:
             result = _build_login_result(False, "cookie_invalid", "cookie文件不存在或已失效", account_file)
             return result if return_detail else False
         kuaishou_logger.info(_msg("🥹", "cookie 失效了，准备重新登录快手创作者平台"))
-        result = await get_ks_cookie(account_file, qrcode_callback=qrcode_callback, headless=headless, cdp_url=cdp_url)
+        result = await get_ks_cookie(account_file, qrcode_callback=qrcode_callback, cancel_check=cancel_check, headless=headless, cdp_url=cdp_url)
         return result if return_detail else result["success"]
 
     result = _build_login_result(True, "cookie_valid", "cookie有效", account_file)
@@ -508,6 +508,7 @@ async def ks_setup(account_file, handle=False, return_detail=False, qrcode_callb
 async def get_ks_cookie(
     account_file,
     qrcode_callback=None,
+    cancel_check=None,
     headless: bool = LOCAL_CHROME_HEADLESS,
     poll_interval: int = 3,
     max_checks: int = 100,
@@ -541,6 +542,9 @@ async def get_ks_cookie(
             qrcode_path = Path(qrcode_info["image_path"])
 
             for _ in range(max_checks):
+                if cancel_check and cancel_check():
+                    kuaishou_logger.info(_msg("🧹", "登录已被新的扫码请求取消"))
+                    return _build_login_result(False, "cancelled", "登录已取消", account_file, qrcode_info, page.url)
                 if page.url.startswith(KUAISHOU_UPLOAD_URL) or await _is_ks_login_page_gone(page):
                     await context.storage_state(path=account_file)
                     if await cookie_auth(account_file):
@@ -1049,7 +1053,9 @@ class KSNote(KSBaseUploader):
         if self.publish_strategy == KUAISHOU_PUBLISH_STRATEGY_SCHEDULED and self.publish_date != 0:
             await self.set_schedule_time(page, self.publish_date)
 
-        while True:
+        max_publish_attempts = 5
+        publish_ok = False
+        for publish_attempt in range(1, max_publish_attempts + 1):
             try:
                 publish_button = page.get_by_text("发布", exact=True)
                 if await publish_button.count() > 0:
@@ -1062,12 +1068,17 @@ class KSNote(KSBaseUploader):
 
                 await _wait_for_kuaishou_publish_success(page)
                 kuaishou_logger.success(_msg("🥳", "图文发布成功，小人开心收工"))
+                publish_ok = True
                 break
             except Exception as exc:
-                kuaishou_logger.info(_msg("🏃", f"小人正在冲刺发布图文: {exc}"))
+                kuaishou_logger.info(
+                    _msg("🏃", f"小人正在冲刺发布图文（{publish_attempt}/{max_publish_attempts}）: {exc}")
+                )
                 if self.debug:
                     await page.screenshot(full_page=True)
                 await asyncio.sleep(1)
+        if not publish_ok:
+            raise RuntimeError(f"快手图文发布连续失败 {max_publish_attempts} 次，已停止重试")
 
     async def upload(self, playwright: Playwright) -> None:
         kuaishou_logger.info(_msg("🧍", "小人先检查 cookie、图片和发布时间"))

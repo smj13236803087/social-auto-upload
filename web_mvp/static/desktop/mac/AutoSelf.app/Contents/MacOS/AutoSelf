@@ -1,0 +1,132 @@
+#!/bin/bash
+# AutoSelf 本机助手：双击后立即退出，Python 完全后台运行（不弹终端）
+
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+
+LOG_DIR="$HOME/Library/Logs"
+LOG_FILE="$LOG_DIR/AutoSelf-agent.log"
+mkdir -p "$LOG_DIR"
+echo "---- $(date '+%Y-%m-%d %H:%M:%S') agent launch ----" >>"$LOG_FILE"
+
+alert() {
+  /usr/bin/osascript -e "display alert \"AutoSelf 本机助手\" message \"$1\" as critical" >/dev/null 2>&1 || true
+}
+
+notify() {
+  /usr/bin/osascript -e "display notification \"$1\" with title \"AutoSelf 本机助手\"" >/dev/null 2>&1 || true
+}
+
+choose_project() {
+  /usr/bin/osascript <<'APPLESCRIPT'
+set theFolder to choose folder with prompt "请选择本机的 social-auto-upload 项目文件夹（仅首次）"
+return POSIX path of theFolder
+APPLESCRIPT
+}
+
+find_project() {
+  local candidates=(
+    "/Applications/social-auto-upload"
+    "$HOME/Applications/social-auto-upload"
+    "$HOME/social-auto-upload"
+    "$HOME/apps/social-auto-upload"
+    "$HOME/Desktop/social-auto-upload"
+    "$HOME/Documents/social-auto-upload"
+  )
+  local p
+  for p in "${candidates[@]}"; do
+    if [[ -f "$p/web_mvp/local_agent.py" ]]; then
+      echo "$p"
+      return 0
+    fi
+  done
+  return 1
+}
+
+MACOS_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONTENTS_DIR="$(cd "$MACOS_DIR/.." && pwd)"
+APP_BUNDLE="$(cd "$CONTENTS_DIR/.." && pwd)"
+PACKAGE_DIR="$(cd "$APP_BUNDLE/.." && pwd)"
+RESOURCES_DIR="$CONTENTS_DIR/Resources"
+
+ensure_token() {
+  mkdir -p "$HOME/.autoself"
+  local cand dir
+  for cand in \
+    "$RESOURCES_DIR/token" \
+    "$PACKAGE_DIR/token" \
+    "$HOME/.autoself/token"
+  do
+    if [[ -f "$cand" ]] && [[ -s "$cand" ]]; then
+      cp -f "$cand" "$HOME/.autoself/token"
+      dir="$(dirname "$cand")"
+      [[ -f "$dir/server" ]] && cp -f "$dir/server" "$HOME/.autoself/server"
+      [[ -f "$dir/config.json" ]] && cp -f "$dir/config.json" "$HOME/.autoself/config.json"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ROOT=""
+if ROOT="$(find_project)"; then
+  echo "found project: $ROOT" >>"$LOG_FILE"
+else
+  alert "首次使用：请选择本机 social-auto-upload 项目文件夹。"
+  ROOT="$(choose_project | tr -d '\r')"
+  ROOT="${ROOT%/}"
+fi
+
+if [[ -z "$ROOT" || ! -f "$ROOT/web_mvp/local_agent.py" ]]; then
+  alert "未找到项目（需要含 web_mvp/local_agent.py）。"
+  exit 1
+fi
+
+if ! ensure_token; then
+  alert "缺少云端连接凭证。请回到网页重新下载「本机助手」后再双击启动。"
+  exit 1
+fi
+
+SERVER="http://autopost.com.cn"
+if [[ -f "$HOME/.autoself/server" ]]; then
+  SERVER="$(tr -d '[:space:]' < "$HOME/.autoself/server")"
+fi
+if [[ -f "$HOME/.autoself/config.json" ]] && [[ -x "$ROOT/.venv/bin/python" ]]; then
+  s="$("$ROOT/.venv/bin/python" -c "import json;print(json.load(open('$HOME/.autoself/config.json')).get('server') or '')" 2>/dev/null || true)"
+  [[ -n "$s" ]] && SERVER="$s"
+fi
+if [[ "$SERVER" == https://autopost.com.cn* ]]; then
+  SERVER="http://autopost.com.cn"
+fi
+
+cd "$ROOT" || exit 1
+
+if pgrep -f "web_mvp.local_agent" >/dev/null 2>&1; then
+  notify "本机助手已在运行，请直接回网页操作"
+  exit 0
+fi
+
+PY=""
+if [[ -x "$ROOT/.venv/bin/python" ]]; then
+  PY="$ROOT/.venv/bin/python"
+elif command -v uv >/dev/null 2>&1; then
+  PY="$(command -v uv)"
+  # uv run needs special handling below
+fi
+
+if [[ -z "$PY" ]]; then
+  alert "启动失败：项目缺少 .venv。"
+  exit 1
+fi
+
+echo "server=$SERVER root=$ROOT" >>"$LOG_FILE"
+
+# 完全脱离：后台启动后本 .app 立刻退出，不占用终端/不挂住 Console
+if [[ -x "$ROOT/.venv/bin/python" ]]; then
+  nohup "$ROOT/.venv/bin/python" -m web_mvp.local_agent --server "$SERVER" >>"$LOG_FILE" 2>&1 &
+else
+  nohup uv run python -m web_mvp.local_agent --server "$SERVER" >>"$LOG_FILE" 2>&1 &
+fi
+disown >/dev/null 2>&1 || true
+
+notify "本机助手已在后台运行，请回网页继续"
+exit 0

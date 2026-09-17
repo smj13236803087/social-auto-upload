@@ -106,8 +106,9 @@ def format_str_for_short_title(origin_title: str) -> str:
         formatted_string = formatted_string[:15]
     if len(formatted_string) < 7:
         # 不足下限时补足到 7；不能用尾部空格（会被平台 trim 掉导致仍不达标）
-        filler = "，精彩内容分享"
-        formatted_string = (formatted_string + filler)[:7] if formatted_string else "精彩视频内容分享"
+        filler = "精彩内容分享"
+        # 勿用中文逗号：短标题校验会标红并拦发表
+        formatted_string = (formatted_string + filler)[:7] if formatted_string else "精彩视频内容"
 
     return formatted_string
 
@@ -368,12 +369,16 @@ async def _wait_for_tencent_login(
     account_file: str,
     qrcode_info: dict | None,
     qrcode_callback=None,
+    cancel_check=None,
     poll_interval: int = 3,
     max_checks: int = 100,
 ) -> dict:
     qrcode_path = Path(qrcode_info["image_path"]) if qrcode_info else None
     scanned_logged = False
     for _ in range(max_checks):
+        if cancel_check and cancel_check():
+            tencent_logger.info(_msg("🧹", "登录已被新的扫码请求取消"))
+            return _build_login_result(False, "cancelled", "登录已取消", account_file, qrcode_info, page.url)
         if await _is_tencent_login_completed(page):
             tencent_logger.info(_msg("🥳", f"扫码成功，已经跳转到登录后页面: {page.url}"))
             return _build_login_result(True, "success", "视频号扫码登录成功", account_file, qrcode_info, page.url)
@@ -405,6 +410,7 @@ async def _wait_for_tencent_login(
 async def tencent_cookie_gen(
     account_file,
     qrcode_callback=None,
+    cancel_check=None,
     poll_interval: int = 3,
     max_checks: int = 100,
     headless: bool = LOCAL_CHROME_HEADLESS,
@@ -435,6 +441,7 @@ async def tencent_cookie_gen(
                 account_file,
                 qrcode_info,
                 qrcode_callback=qrcode_callback,
+                cancel_check=cancel_check,
                 poll_interval=poll_interval,
                 max_checks=max_checks,
             )
@@ -475,6 +482,7 @@ async def tencent_setup(
     handle=False,
     return_detail=False,
     qrcode_callback=None,
+    cancel_check=None,
     headless: bool = LOCAL_CHROME_HEADLESS,
 ):
     account_file = _resolve_account_file(account_file)
@@ -484,7 +492,7 @@ async def tencent_setup(
             return result if return_detail else False
 
         tencent_logger.info(_msg("🥹", "cookie 失效了，准备打开浏览器重新登录"))
-        result = await tencent_cookie_gen(account_file, qrcode_callback=qrcode_callback, headless=headless)
+        result = await tencent_cookie_gen(account_file, qrcode_callback=qrcode_callback, cancel_check=cancel_check, headless=headless)
         return result if return_detail else result["success"]
 
     result = _build_login_result(True, "cookie_valid", "cookie有效", account_file)
@@ -900,16 +908,117 @@ class TencentBaseUploader(BaseVideoUploader):
             except Exception:
                 await asyncio.sleep(2)
 
+    async def _page_has_publish_success(self, page: Page, publish_btn) -> bool:
+        cur = page.url or ""
+        if "/post/create" not in cur:
+            return True
+        try:
+            if not await publish_btn.count():
+                return True
+        except Exception:
+            return True
+        success_texts = ("发表成功", "发布成功", "已发表", "已发布", "提交成功")
+        try:
+            body_text = await page.locator("body").inner_text(timeout=1000)
+        except Exception:
+            body_text = ""
+        return any(t in body_text for t in success_texts)
+
+    async def _handle_post_click_dialogs(self, page: Page) -> None:
+        # 点「发表」后常见：实名验证二维码、二次确认弹窗。
+        qr = await self.wait_for_realtime_verification(page)
+        if qr:
+            return
+        confirm = page.locator("div.weui-desktop-dialog__wrp:visible").filter(
+            has_text="确认"
+        ).locator('button:has-text("确定"), button:has-text("确认"), button:has-text("发表")').first
+        try:
+            if await confirm.count() and await confirm.is_visible():
+                await confirm.click(timeout=3000)
+                tencent_logger.info(_msg("🧍", "已点击发表确认弹窗"))
+                await page.wait_for_timeout(800)
+        except Exception:
+            pass
+
+    async def _collect_publish_blockers(self, page: Page) -> str:
+        hints: list[str] = []
+        try:
+            err_selectors = [
+                ".form-error",
+                ".form-item-error",
+                ".weui-desktop-form__msg_error",
+                ".weui-desktop-tips__error",
+                "[class*='error-tip']",
+                "[class*='form-error']",
+                "[class*='ErrorTip']",
+                "div.tip-text",
+            ]
+            for sel in err_selectors:
+                locs = page.locator(sel)
+                count = await locs.count()
+                for i in range(min(count, 4)):
+                    try:
+                        loc = locs.nth(i)
+                        if not await loc.is_visible():
+                            continue
+                        tip = (await loc.inner_text()).strip().replace("\n", " ")
+                        if tip and 1 < len(tip) < 80 and tip not in hints:
+                            hints.append(tip)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        try:
+            dialogs = page.locator("div.weui-desktop-dialog__wrp:visible")
+            count = await dialogs.count()
+            for i in range(min(count, 3)):
+                tip = (await dialogs.nth(i).inner_text()).strip().replace("\n", " ")
+                if tip:
+                    hints.append(tip[:120])
+        except Exception:
+            pass
+        try:
+            reds = await page.evaluate(
+                r"""() => {
+                  const out = [];
+                  for (const el of document.querySelectorAll('div,span,p,label')) {
+                    const st = getComputedStyle(el);
+                    const c = st.color || '';
+                    const t = (el.innerText || '').trim();
+                    if (!t || t.length > 60) continue;
+                    const m = c.match(/rgb\((\d+),\s*(\d+),\s*(\d+)/);
+                    if (!m) continue;
+                    const r=+m[1], g=+m[2], b=+m[3];
+                    if (r > 150 && g < 120 && b < 120) out.push(t);
+                    if (out.length >= 5) break;
+                  }
+                  return out;
+                }"""
+            )
+            for tip in reds or []:
+                tip = str(tip).strip().replace("\n", " ")
+                if tip and tip not in hints:
+                    hints.append(tip[:80])
+        except Exception:
+            pass
+        return " | ".join(hints)[:240]
+
     async def submit_publish(self, page: Page) -> None:
         is_draft = getattr(self, "is_draft", False)
-        # 先等待并清理遮罩/弹窗,再等发表按钮出现
+        # 先等待并清理「切换账号」遮罩，再等发表按钮出现（勿误删实名验证弹窗）
         for wait_round in range(60):
             await self._dismiss_switch_account_dialog(page)
             try:
-                await page.evaluate("""() => document.querySelectorAll('.mask, .changeAccount-dialog, .common-dialog').forEach(e => e.remove())""")
+                await page.evaluate(
+                    """() => document.querySelectorAll('.changeAccount-dialog').forEach(e => e.remove())"""
+                )
             except Exception:
                 pass
-            publish_btn = page.get_by_role("button", name="发表", exact=True).first if not is_draft else page.get_by_role("button", name="保存草稿").first
+            publish_btn = (
+                page.get_by_role("button", name="发表", exact=True).first
+                if not is_draft
+                else page.get_by_role("button", name="保存草稿").first
+            )
             try:
                 if await publish_btn.count() and await publish_btn.is_visible():
                     break
@@ -918,44 +1027,73 @@ class TencentBaseUploader(BaseVideoUploader):
             await asyncio.sleep(1)
         else:
             tencent_logger.warning(_msg("😵", "60s 内未找到可见的发表/草稿按钮，尝试强制继续"))
-        # 点发表/草稿
-        for attempt in range(20):
+
+        debug_dir = Path(BASE_DIR) / "tmp" / "tencent_publish"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+
+        max_publish_attempts = 5
+        last_error = ""
+        for attempt in range(1, max_publish_attempts + 1):
             try:
+                await self._dismiss_switch_account_dialog(page)
                 if await publish_btn.count():
                     try:
                         await publish_btn.click(timeout=4000)
                     except Exception:
                         await publish_btn.evaluate("el => el.click()")
+                    tencent_logger.info(
+                        _msg("🖱️", f"已点击「{'保存草稿' if is_draft else '发表'}」（{attempt}/{max_publish_attempts}）")
+                    )
+
+                if not is_draft:
+                    await self._handle_post_click_dialogs(page)
+
                 if is_draft:
-                    await page.wait_for_url("**/post/list**", timeout=5000)
+                    await page.wait_for_url("**/post/list**", timeout=8000)
                     tencent_logger.success(_msg("🥳", "视频草稿保存成功"))
-                else:
-                    # 发表成功后视频号可能跳 /platform（首页）、/post/list 或留在 create 页但按钮消失。
-                    # 综合判断：URL 离开 /post/create 或 发表按钮不再存在。
-                    for _ in range(10):
-                        await asyncio.sleep(1)
-                        cur = page.url
-                        if "/post/create" not in cur:
-                            tencent_logger.success(_msg("🥳", "视频发布成功"))
-                            return
-                        if not await publish_btn.count():
-                            tencent_logger.success(_msg("🥳", "视频发布成功（按钮已消失）"))
-                            return
-                    raise Exception("发表后 10s 页面未变化")
-                return
+                    return
+
+                for _ in range(12):
+                    await asyncio.sleep(1)
+                    if await self._page_has_publish_success(page, publish_btn):
+                        tencent_logger.success(_msg("🥳", "视频发布成功"))
+                        return
+                    if await page.locator("div.weui-desktop-dialog__wrp:visible").filter(has_text="实名验证").count():
+                        await self.wait_for_realtime_verification(page)
+
+                blocker = await self._collect_publish_blockers(page)
+                shot = debug_dir / f"publish_stuck_{attempt}.png"
+                try:
+                    await page.screenshot(path=str(shot), full_page=True)
+                except Exception:
+                    shot = None
+                detail = blocker or "发表后页面仍停留在创建页"
+                if shot:
+                    detail = f"{detail}；截图: {shot}"
+                # Clear form validation won't heal by more clicks.
+                if blocker and any(k in blocker for k in ("请", "不能", "无法", "失败", "错误", "必填", "不符合")):
+                    raise RuntimeError(f"视频号表单校验未通过，已停止重试: {detail}")
+                raise Exception(detail)
+            except RuntimeError:
+                raise
             except Exception as exc:
                 current_url = page.url
                 if is_draft and ("post/list" in current_url or "draft" in current_url):
                     tencent_logger.success(_msg("🥳", "视频草稿保存成功"))
                     return
-                if (not is_draft) and "/post/create" not in current_url:
+                if (not is_draft) and await self._page_has_publish_success(page, publish_btn):
                     tencent_logger.success(_msg("🥳", "视频发布成功"))
                     return
-                if attempt and attempt % 5 == 0:
-                    tencent_logger.warning(_msg("😵", f"发布仍未完成(第{attempt}次)，异常: {str(exc)[:60]}"))
-                tencent_logger.info(_msg("🏃", "视频正在发布中..."))
+                last_error = str(exc)
+                tencent_logger.warning(
+                    _msg("😵", f"发布未完成（{attempt}/{max_publish_attempts}）: {last_error[:160]}")
+                )
+                if attempt >= max_publish_attempts:
+                    break
                 await asyncio.sleep(1)
-        raise RuntimeError("发布未在预期时间内完成，请检查发布页面")
+        raise RuntimeError(
+            f"视频号发布连续失败 {max_publish_attempts} 次，已停止重试: {last_error[:200]}"
+        )
 
 
 class TencentVideo(TencentBaseUploader):

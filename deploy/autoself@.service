@@ -1,0 +1,26 @@
+[Unit]
+Description=AutoSelf web_mvp on port %i
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/apps/autoself
+EnvironmentFile=/home/ubuntu/autoself/.env
+Environment=AUTOSELF_BIND=127.0.0.1:%i
+Environment=AUTOSELF_WORKERS=1
+Environment=AUTOSELF_THREADS=8
+Environment=AUTOSELF_ENABLE_SCHEDULERS=0
+ExecStart=/home/ubuntu/apps/autoself/.venv/bin/python -m gunicorn -c web_mvp/gunicorn.conf.py web_mvp.app:app
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=35
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

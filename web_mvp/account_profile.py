@@ -159,62 +159,45 @@ def _fetch_kuaishou(account_file: Path) -> dict:
 
 
 def _fetch_tencent(account_file: Path) -> dict:
-    """Scrape WeChat Channels creator console for display name."""
-    import asyncio
+    """Fetch WeChat Channels profile via auth_data API (no Chrome needed)."""
+    session = _storage_session(account_file)
+    resp = session.post(
+        "https://channels.weixin.qq.com/cgi-bin/mmfinderassistant-bin/auth/auth_data",
+        json={},
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://channels.weixin.qq.com/platform",
+            "Origin": "https://channels.weixin.qq.com",
+        },
+        timeout=20,
+    )
+    resp.raise_for_status()
+    payload = resp.json() or {}
+    if payload.get("errCode") not in (0, None):
+        raise RuntimeError(payload.get("errMsg") or "视频号 auth_data 失败")
 
-    from patchright.async_api import async_playwright
+    data = payload.get("data") or {}
+    finder = data.get("finderUser") or {}
+    user_attr = data.get("userAttr") or {}
 
-    async def _scrape() -> tuple[str, str]:
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(headless=True, channel="chrome")
-            try:
-                context = await browser.new_context(storage_state=str(account_file))
-                page = await context.new_page()
-                await page.goto(
-                    "https://channels.weixin.qq.com/platform",
-                    wait_until="domcontentloaded",
-                    timeout=60000,
-                )
-                await page.wait_for_timeout(3500)
-                if "login" in (page.url or "").lower():
-                    raise RuntimeError("视频号 Cookie 已失效")
+    nickname = str(finder.get("nickname") or user_attr.get("nickname") or "").strip()
+    uniq_id = str(finder.get("uniqId") or "").strip()
+    weixin_id = str(user_attr.get("encryptedUsername") or "").strip()
+    admin_nickname = str(finder.get("adminNickname") or user_attr.get("nickname") or "").strip()
 
-                selectors = [
-                    ".finder-nickname",
-                    ".account-info .nickname",
-                    ".video-account-info .name",
-                    ".header-account-name",
-                    '[class*="nickname"]',
-                    ".account-name",
-                ]
-                for sel in selectors:
-                    loc = page.locator(sel).first
-                    try:
-                        if await loc.count():
-                            text = (await loc.inner_text()).strip()
-                            if text and len(text) < 80:
-                                return text, ""
-                    except Exception:
-                        continue
-
-                # Fallback: page title often contains account name
-                title = (await page.title() or "").strip()
-                for junk in ("视频号助手", "微信", "-", "|", "·"):
-                    title = title.replace(junk, " ")
-                title = " ".join(title.split()).strip()
-                if title:
-                    return title, ""
-                return "", ""
-            finally:
-                await browser.close()
-
-    nickname, platform_id = asyncio.run(_scrape())
     if not nickname:
-        raise RuntimeError("无法获取视频号昵称")
+        raise RuntimeError("视频号未返回昵称")
+
+    display_name = nickname
     return {
-        "display_name": nickname,
-        "platform_id": platform_id,
-        "extra": {},
+        "display_name": display_name,
+        "platform_id": uniq_id or weixin_id,
+        "extra": {
+            "uniqId": uniq_id,
+            "weixin_id": weixin_id,
+            "admin_nickname": admin_nickname,
+            "finder_nickname": nickname,
+        },
     }
 
 

@@ -21,9 +21,20 @@ class DouyinDeclarationTests(unittest.TestCase):
 
     def test_legacy_positional_runtime_flags_keep_their_meaning(self):
         video = DouYinVideo(
-            "标题", "/tmp/demo.mp4", [], 0, "/tmp/cookie.json",
-            None, "", "", None, "",
-            "scheduled", False, False,
+            "标题",
+            "/tmp/demo.mp4",
+            [],
+            0,
+            "/tmp/cookie.json",
+            None,
+            "",
+            "",
+            None,
+            "",
+            None,
+            publish_strategy="scheduled",
+            debug=False,
+            headless=False,
         )
         self.assertEqual(video.publish_strategy, "scheduled")
         self.assertFalse(video.debug)
@@ -68,11 +79,15 @@ class DouyinDeclarationTests(unittest.TestCase):
         locator = MagicMock()
         locator.set_input_files = AsyncMock()
         locator.count = AsyncMock(return_value=1)
+        locator.wait_for = AsyncMock()
+        locator.first = locator
         page = MagicMock()
         page.goto = AsyncMock()
         page.wait_for_url = AsyncMock()
         page.wait_for_selector = AsyncMock()
+        page.wait_for_timeout = AsyncMock()
         page.locator.return_value = locator
+        page.locator.return_value.first = locator
 
         context = MagicMock()
         context.new_page = AsyncMock(return_value=page)

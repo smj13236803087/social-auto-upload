@@ -13,6 +13,11 @@ import requests
 
 
 GITHUB_RELEASE_API = "https://api.github.com/repos/biliup/biliup/releases/latest"
+# 国内服务器直连 GitHub releases 经常极慢/卡住，优先走镜像。
+GITHUB_ASSET_MIRRORS = (
+    "https://ghfast.top/",
+    "https://mirror.ghproxy.com/",
+)
 
 
 def get_biliup_runtime_root() -> Path:
@@ -122,15 +127,30 @@ def _pick_executable(extract_root: Path) -> Path:
 
 def download_biliup_asset(release: dict, destination: Path) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
+    asset_url = release["asset_url"]
+    candidate_urls = [f"{mirror}{asset_url}" for mirror in GITHUB_ASSET_MIRRORS]
+    candidate_urls.append(asset_url)
+
     with tempfile.TemporaryDirectory(prefix="biliup-download-") as temp_dir:
         temp_root = Path(temp_dir)
         archive_path = temp_root / release["asset_name"]
-        with requests.get(release["asset_url"], stream=True, timeout=120) as response:
-            response.raise_for_status()
-            with archive_path.open("wb") as file_obj:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        file_obj.write(chunk)
+        last_error: Exception | None = None
+        for url in candidate_urls:
+            try:
+                with requests.get(url, stream=True, timeout=120) as response:
+                    response.raise_for_status()
+                    with archive_path.open("wb") as file_obj:
+                        for chunk in response.iter_content(chunk_size=1024 * 1024):
+                            if chunk:
+                                file_obj.write(chunk)
+                last_error = None
+                break
+            except Exception as exc:  # noqa: BLE001 - try next mirror
+                last_error = exc
+                if archive_path.exists():
+                    archive_path.unlink()
+        if last_error is not None:
+            raise RuntimeError(f"下载 biliup 失败: {last_error}") from last_error
 
         extract_root = temp_root / "extract"
         extract_root.mkdir(parents=True, exist_ok=True)

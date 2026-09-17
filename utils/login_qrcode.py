@@ -74,6 +74,10 @@ def print_terminal_qrcode(
     compact: bool = True,
     border: int = 0,
 ) -> None:
+    # 本机助手等非 TTY 场景不要往日志狂打 ASCII 码，网页已展示二维码。
+    if not (sys.stdout and sys.stdout.isatty()):
+        print(f"请使用{app_name}扫码登录（二维码已保存：{qrcode_path}）", flush=True)
+        return
     print()
     print(f"请使用{app_name}扫描下方二维码登录：")
     qrcode = segno.make(qrcode_content, error="L", boost_error=False)

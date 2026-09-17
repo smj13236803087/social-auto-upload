@@ -77,8 +77,27 @@ def main() -> None:
     webview.start()
 
 
+def _gui_alert(message: str) -> None:
+    if sys.platform != "darwin":
+        return
+    try:
+        import subprocess
+
+        subprocess.run(
+            ["osascript", "-e", f'display alert "AutoSelf" message "{message}" as critical'],
+            check=False,
+            capture_output=True,
+        )
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
         sys.exit(0)
+    except Exception as exc:
+        print(f"AutoSelf 启动失败: {exc}", flush=True)
+        _gui_alert(f"启动失败：{exc}")
+        sys.exit(1)

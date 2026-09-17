@@ -144,7 +144,15 @@ def _update_sub(sub_id: str, **fields) -> None:
 
 def run_subscription(sub_id: str, *, force: bool = False) -> dict:
     if _publish_fn is None:
-        raise RuntimeError("上传函数未初始化")
+        err = "上传函数未初始化（调度器未挂到 worker，请重启 autoself@5410）"
+        _update_sub(
+            sub_id,
+            last_run_at=datetime.now().isoformat(timespec="seconds"),
+            last_run_date=datetime.now().strftime("%Y-%m-%d"),
+            last_status="failed",
+            last_error=err,
+        )
+        raise RuntimeError(err)
 
     with _lock:
         items = load_subscriptions()
@@ -272,6 +280,7 @@ def run_subscription(sub_id: str, *, force: bool = False) -> dict:
 
 
 def _scheduler_loop() -> None:
+    print("[scheduler] creator-sub loop started", flush=True)
     while True:
         try:
             now = datetime.now()
@@ -289,13 +298,13 @@ def _scheduler_loop() -> None:
                 sub_id = sub.get("id")
                 if not sub_id or sub_id in _running_ids:
                     continue
+                print(f"[scheduler] due subscription {sub_id} at {hhmm}", flush=True)
                 try:
                     run_subscription(sub_id, force=False)
-                except Exception:
-                    # Errors already persisted on the subscription record.
-                    pass
-        except Exception:
-            pass
+                except Exception as exc:
+                    print(f"[scheduler] subscription {sub_id} failed: {exc}", flush=True)
+        except Exception as exc:
+            print(f"[scheduler] loop error: {exc}", flush=True)
         time.sleep(20)
 
 
@@ -306,3 +315,4 @@ def start_scheduler() -> None:
     _scheduler_started = True
     thread = threading.Thread(target=_scheduler_loop, name="creator-sub-scheduler", daemon=True)
     thread.start()
+    print("[scheduler] creator-sub thread launched", flush=True)
