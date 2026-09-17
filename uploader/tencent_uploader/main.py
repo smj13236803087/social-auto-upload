@@ -817,10 +817,11 @@ class TencentBaseUploader(BaseVideoUploader):
                 pass
 
     async def apply_original_statement(self, page: Page) -> None:
-        # 视频号「视频标注」下拉：本项目成片经 AI 处理（TTS 配音、AI 字幕、AI 前贴片），
-        # 依平台合规要求如实选「含AI生成内容」（与「内容为转载」等并列，选定即可、无需填写来源）。
-        # 注意：这与上方独立的「声明原创」复选框是两个不同字段，本项目走 AI 标注、不勾原创声明。
-        label_text = getattr(self, "content_label", None) or "含AI生成内容"
+        # 默认不选「含AI生成内容」等视频标注；仅当调用方显式传入 content_label 时才设置。
+        label_text = (getattr(self, "content_label", None) or "").strip()
+        if not label_text:
+            tencent_logger.info(_msg("🧾", "未指定视频标注，跳过（不勾选含AI生成内容）"))
+            return
         try:
             entry = page.get_by_text("选择视频标注", exact=True).first
             if not await entry.count():

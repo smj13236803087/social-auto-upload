@@ -481,21 +481,7 @@ class HuPuVideo(BaseVideoUploader):
                 hupu_logger.info(_msg("🏷️", "已点击「原创/二创」"))
         except Exception as exc:
             hupu_logger.warning(_msg("⚠️", f"点击原创/二创失败: {exc}"))
-
-        try:
-            # 2) 选择「含AI生成内容」
-            combobox = page.get_by_role("combobox")
-            if await combobox.count():
-                await combobox.click(timeout=5000)
-                await page.wait_for_timeout(1000)
-
-                ai_option = page.get_by_text("含AI生成内容")
-                if await ai_option.count():
-                    await ai_option.click(timeout=5000)
-                    await page.wait_for_timeout(500)
-                    hupu_logger.info(_msg("🏷️", "已选择「含AI生成内容」"))
-        except Exception as exc:
-            hupu_logger.warning(_msg("⚠️", f"选择 AI 声明失败: {exc}"))
+        # 默认不选「含AI生成内容」
 
     async def _submit_publish(self, page: Page) -> None:
         """点击「确定发布」并等待跳转到帖子页面。"""

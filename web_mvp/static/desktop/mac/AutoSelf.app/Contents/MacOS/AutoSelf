@@ -1,12 +1,16 @@
 #!/bin/bash
-# AutoSelf 本机助手：双击后立即退出，Python 完全后台运行（不弹终端）
+# AutoSelf 本机助手（可直接发给用户，无需从网站下载）
+# 首次打开：输入服务器 + 邮箱 + 密码 → 登录拿 token → 后台跑 agent
 
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
 LOG_DIR="$HOME/Library/Logs"
 LOG_FILE="$LOG_DIR/AutoSelf-agent.log"
-mkdir -p "$LOG_DIR"
+CFG_DIR="$HOME/.autoself"
+mkdir -p "$LOG_DIR" "$CFG_DIR"
 echo "---- $(date '+%Y-%m-%d %H:%M:%S') agent launch ----" >>"$LOG_FILE"
+
+DEFAULT_SERVER="${AUTOSELF_DEFAULT_SERVER:-http://82.156.164.185}"
 
 alert() {
   /usr/bin/osascript -e "display alert \"AutoSelf 本机助手\" message \"$1\" as critical" >/dev/null 2>&1 || true
@@ -16,15 +20,54 @@ notify() {
   /usr/bin/osascript -e "display notification \"$1\" with title \"AutoSelf 本机助手\"" >/dev/null 2>&1 || true
 }
 
+prompt_text() {
+  /usr/bin/osascript <<APPLESCRIPT
+set defaultAnswer to "$2"
+try
+  set r to display dialog "$1" default answer defaultAnswer buttons {"取消", "确定"} default button "确定"
+  return text returned of r
+on error
+  return ""
+end try
+APPLESCRIPT
+}
+
+prompt_hidden() {
+  /usr/bin/osascript <<APPLESCRIPT
+try
+  set r to display dialog "$1" default answer "" with hidden answer buttons {"取消", "确定"} default button "确定"
+  return text returned of r
+on error
+  return ""
+end try
+APPLESCRIPT
+}
+
 choose_project() {
   /usr/bin/osascript <<'APPLESCRIPT'
-set theFolder to choose folder with prompt "请选择本机的 social-auto-upload 项目文件夹（仅首次）"
+set theFolder to choose folder with prompt "请选择本机的 social-auto-upload 项目文件夹（仅首次；需已安装依赖）"
 return POSIX path of theFolder
 APPLESCRIPT
 }
 
+MACOS_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONTENTS_DIR="$(cd "$MACOS_DIR/.." && pwd)"
+APP_BUNDLE="$(cd "$CONTENTS_DIR/.." && pwd)"
+PACKAGE_DIR="$(cd "$APP_BUNDLE/.." && pwd)"
+RESOURCES_DIR="$CONTENTS_DIR/Resources"
+
 find_project() {
+  if [[ -f "$CFG_DIR/project" ]]; then
+    local saved
+    saved="$(tr -d '[:space:]' <"$CFG_DIR/project")"
+    if [[ -f "$saved/web_mvp/local_agent.py" ]]; then
+      echo "$saved"
+      return 0
+    fi
+  fi
   local candidates=(
+    "$PACKAGE_DIR/social-auto-upload"
+    "$PACKAGE_DIR/runtime"
     "/Applications/social-auto-upload"
     "$HOME/Applications/social-auto-upload"
     "$HOME/social-auto-upload"
@@ -42,56 +85,127 @@ find_project() {
   return 1
 }
 
-MACOS_DIR="$(cd "$(dirname "$0")" && pwd)"
-CONTENTS_DIR="$(cd "$MACOS_DIR/.." && pwd)"
-APP_BUNDLE="$(cd "$CONTENTS_DIR/.." && pwd)"
-PACKAGE_DIR="$(cd "$APP_BUNDLE/.." && pwd)"
-RESOURCES_DIR="$CONTENTS_DIR/Resources"
+login_and_save() {
+  local server email password out token final_server
+  server="$(prompt_text "服务器地址（备案前可用 IP，例如 http://82.156.164.185）" "$DEFAULT_SERVER" | tr -d '\r')"
+  server="${server%/}"
+  [[ -z "$server" ]] && return 1
+  email="$(prompt_text "登录邮箱" "" | tr -d '\r')"
+  [[ -z "$email" ]] && return 1
+  password="$(prompt_hidden "登录密码" | tr -d '\r')"
+  [[ -z "$password" ]] && return 1
+
+  out="$(
+    AUTOSELF_LOGIN_SERVER="$server" \
+    AUTOSELF_LOGIN_EMAIL="$email" \
+    AUTOSELF_LOGIN_PASSWORD="$password" \
+    python3 - <<'PY' 2>>"$LOG_FILE"
+import json, os, urllib.request
+
+server = os.environ["AUTOSELF_LOGIN_SERVER"].rstrip("/")
+payload = json.dumps({
+    "email": os.environ["AUTOSELF_LOGIN_EMAIL"],
+    "password": os.environ["AUTOSELF_LOGIN_PASSWORD"],
+}).encode("utf-8")
+
+def try_login(base: str) -> tuple[str, str]:
+    req = urllib.request.Request(
+        base + "/api/auth/login",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=20) as r:
+        data = json.loads(r.read().decode("utf-8", errors="replace"))
+    token = (data.get("token") or "").strip()
+    if not token:
+        raise RuntimeError(data.get("error") or "登录失败")
+    return base, token
+
+bases = [server]
+if server.startswith("https://"):
+    bases.append("http://" + server[len("https://") :])
+
+last_err = ""
+for base in bases:
+    try:
+        used, token = try_login(base)
+        print(json.dumps({"ok": True, "server": used, "token": token}, ensure_ascii=False))
+        raise SystemExit(0)
+    except Exception as exc:  # noqa: BLE001
+        last_err = str(exc)
+print(json.dumps({"ok": False, "error": last_err}, ensure_ascii=False))
+PY
+  )"
+
+  token="$(OUT="$out" python3 -c 'import json,os; d=json.loads(os.environ["OUT"]); print((d.get("token") or ""))')"
+  final_server="$(OUT="$out" python3 -c 'import json,os; d=json.loads(os.environ["OUT"]); print((d.get("server") or ""))')"
+  if [[ -z "$token" || -z "$final_server" ]]; then
+    echo "login failed out=$out" >>"$LOG_FILE"
+    return 1
+  fi
+
+  printf '%s\n' "$token" >"$CFG_DIR/token"
+  printf '%s\n' "$final_server" >"$CFG_DIR/server"
+  TOKEN="$token" SERVER="$final_server" python3 - <<'PY'
+import json, os
+json.dump(
+    {"server": os.environ["SERVER"], "token": os.environ["TOKEN"]},
+    open(os.path.expanduser("~/.autoself/config.json"), "w"),
+    ensure_ascii=False,
+    indent=2,
+)
+PY
+  echo "login ok server=$final_server" >>"$LOG_FILE"
+  return 0
+}
 
 ensure_token() {
-  mkdir -p "$HOME/.autoself"
+  mkdir -p "$CFG_DIR"
   local cand dir
   for cand in \
     "$RESOURCES_DIR/token" \
     "$PACKAGE_DIR/token" \
-    "$HOME/.autoself/token"
+    "$CFG_DIR/token"
   do
     if [[ -f "$cand" ]] && [[ -s "$cand" ]]; then
-      cp -f "$cand" "$HOME/.autoself/token"
+      cp -f "$cand" "$CFG_DIR/token"
       dir="$(dirname "$cand")"
-      [[ -f "$dir/server" ]] && cp -f "$dir/server" "$HOME/.autoself/server"
-      [[ -f "$dir/config.json" ]] && cp -f "$dir/config.json" "$HOME/.autoself/config.json"
+      [[ -f "$dir/server" ]] && cp -f "$dir/server" "$CFG_DIR/server"
+      [[ -f "$dir/config.json" ]] && cp -f "$dir/config.json" "$CFG_DIR/config.json"
       return 0
     fi
   done
-  return 1
+  notify "首次使用：请登录你的 AutoSelf 账号"
+  login_and_save
 }
 
 ROOT=""
 if ROOT="$(find_project)"; then
   echo "found project: $ROOT" >>"$LOG_FILE"
 else
-  alert "首次使用：请选择本机 social-auto-upload 项目文件夹。"
+  alert "首次使用：请选择本机 social-auto-upload 项目文件夹（需已 uv sync / 装好依赖）。"
   ROOT="$(choose_project | tr -d '\r')"
   ROOT="${ROOT%/}"
 fi
 
 if [[ -z "$ROOT" || ! -f "$ROOT/web_mvp/local_agent.py" ]]; then
-  alert "未找到项目（需要含 web_mvp/local_agent.py）。"
+  alert "未找到运行环境（需要含 web_mvp/local_agent.py 的项目目录）。"
   exit 1
 fi
+printf '%s\n' "$ROOT" >"$CFG_DIR/project"
 
 if ! ensure_token; then
-  alert "缺少云端连接凭证。请回到网页重新下载「本机助手」后再双击启动。"
+  alert "登录失败。请确认服务器地址可访问，且邮箱密码正确。"
   exit 1
 fi
 
-SERVER="http://autopost.com.cn"
-if [[ -f "$HOME/.autoself/server" ]]; then
-  SERVER="$(tr -d '[:space:]' < "$HOME/.autoself/server")"
+SERVER="$DEFAULT_SERVER"
+if [[ -f "$CFG_DIR/server" ]]; then
+  SERVER="$(tr -d '[:space:]' <"$CFG_DIR/server")"
 fi
-if [[ -f "$HOME/.autoself/config.json" ]] && [[ -x "$ROOT/.venv/bin/python" ]]; then
-  s="$("$ROOT/.venv/bin/python" -c "import json;print(json.load(open('$HOME/.autoself/config.json')).get('server') or '')" 2>/dev/null || true)"
+if [[ -f "$CFG_DIR/config.json" ]]; then
+  s="$(python3 -c "import json;print(json.load(open('$CFG_DIR/config.json')).get('server') or '')" 2>/dev/null || true)"
   [[ -n "$s" ]] && SERVER="$s"
 fi
 if [[ "$SERVER" == https://autopost.com.cn* ]]; then
@@ -101,32 +215,18 @@ fi
 cd "$ROOT" || exit 1
 
 if pgrep -f "web_mvp.local_agent" >/dev/null 2>&1; then
-  notify "本机助手已在运行，请直接回网页操作"
+  notify "本机助手已在运行"
   exit 0
 fi
 
-PY=""
-if [[ -x "$ROOT/.venv/bin/python" ]]; then
-  PY="$ROOT/.venv/bin/python"
-elif command -v uv >/dev/null 2>&1; then
-  PY="$(command -v uv)"
-  # uv run needs special handling below
-fi
-
-if [[ -z "$PY" ]]; then
-  alert "启动失败：项目缺少 .venv。"
+if [[ ! -x "$ROOT/.venv/bin/python" ]]; then
+  alert "项目缺少 .venv。请先在项目目录执行：uv sync --extra web"
   exit 1
 fi
 
 echo "server=$SERVER root=$ROOT" >>"$LOG_FILE"
-
-# 完全脱离：后台启动后本 .app 立刻退出，不占用终端/不挂住 Console
-if [[ -x "$ROOT/.venv/bin/python" ]]; then
-  nohup "$ROOT/.venv/bin/python" -m web_mvp.local_agent --server "$SERVER" >>"$LOG_FILE" 2>&1 &
-else
-  nohup uv run python -m web_mvp.local_agent --server "$SERVER" >>"$LOG_FILE" 2>&1 &
-fi
+nohup "$ROOT/.venv/bin/python" -m web_mvp.local_agent --server "$SERVER" >>"$LOG_FILE" 2>&1 &
 disown >/dev/null 2>&1 || true
 
-notify "本机助手已在后台运行，请回网页继续"
+notify "本机助手已在后台运行"
 exit 0

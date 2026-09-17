@@ -1,0 +1,10 @@
+-- AutoSelf SQL migrations (applied in filename order by scripts/apply_migrations.sh).
+--
+-- How to change tables:
+--   1. Edit docs/autoself_schema.sql (canonical full schema for fresh installs)
+--   2. Add a new file here:  YYYYMMDDHHMMSS_short_name.sql  (ALTER / CREATE only)
+--   3. Local:  set -a && source .env && set +a && ./scripts/apply_migrations.sh
+--   4. Prod:   ./scripts/deploy_autoself.sh   (runs pending migrations automatically)
+--
+-- Already-applied files are recorded in schema_migrations and will not re-run.
+-- Do not edit a migration after it has been applied on any environment.

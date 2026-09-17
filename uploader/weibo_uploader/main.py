@@ -344,8 +344,8 @@ class WeiBoVideo(BaseVideoUploader):
             # 4) 类型 = 二创（必选）
             await self._select_type(publish_page)
 
-            # 5) 内容声明 = 含AI生成内容（必选）
-            await self._select_declaration(publish_page)
+            # 5) 内容声明：默认不选「含AI生成内容」
+            # await self._select_declaration(publish_page)
 
             # 6) 填写标题（必填）
             await self._fill_title(publish_page)

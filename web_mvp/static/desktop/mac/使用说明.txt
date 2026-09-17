@@ -1,4 +1,15 @@
-AutoSelf 本机助手（Mac）
+系统级安装（Mac）
 
-双击「AutoSelf助手」即可后台运行，不会弹出终端。
-若拦截：右键 → 打开。
+【你打包】
+  ./scripts/build_mac_desktop.sh
+
+【发给用户（二选一）】
+  dist/AutoSelf-Mac.dmg  ← 推荐：打开后把 AutoSelf 拖进「应用程序」
+  dist/AutoSelf-Mac.pkg  ← 双击按向导，装到 /Applications
+
+【用户】
+  安装后从「启动台 / 应用程序」打开，界面和网站一样
+
+默认服务器：http://82.156.164.185
+未签名时若拦截：右键 → 打开
+（以后可做 Apple 开发者签名 + 公证，拦截会更少）

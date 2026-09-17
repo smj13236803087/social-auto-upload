@@ -414,17 +414,9 @@ class AlipayVideo(BaseVideoUploader):
             alipay_logger.warning(_msg("😵", f"选择合集失败，跳过归集继续发布: {exc}"))
 
     async def check_ai_label(self, page: Page) -> None:
-        # 作者声明是 radio 组（默认"内容无需标注"NO_STATEMENT），用 radio.check() 选中"内容由AI生成"(A_AG3)
-        ai_label = page.locator('label.antd5-radio-wrapper', has_text="内容由AI生成").first
-        try:
-            if await ai_label.count():
-                radio = ai_label.locator('input[type="radio"]').first
-                await radio.scroll_into_view_if_needed()
-                await radio.check(timeout=5000)
-                await page.wait_for_timeout(500)
-                alipay_logger.success(_msg("🏷️", "已勾选「内容由AI生成」"))
-        except Exception as exc:
-            alipay_logger.warning(_msg("😵", f"勾选「内容由AI生成」失败: {exc}"))
+        # 默认保持平台「内容无需标注」，不勾选「内容由AI生成」。
+        alipay_logger.info(_msg("🏷️", "跳过作者声明（不勾选内容由AI生成）"))
+        return
 
     async def wait_for_upload_complete(self, page: Page, timeout: int = 1800) -> None:
         # 等待"确认发布"按钮变为可点击（视频上传+转码完成）

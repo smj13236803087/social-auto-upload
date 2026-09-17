@@ -1599,6 +1599,39 @@
       }
     }
 
+    // Soft update: keep App open; when server HTML/JS changes, reload this window only.
+    (function watchWebUpdates() {
+      let current = "";
+      async function tick() {
+        try {
+          const res = await fetch("/api/client-version", { cache: "no-store" });
+          const data = await res.json();
+          const next = String((data && data.web) || "");
+          if (!next) return;
+          if (!current) {
+            current = next;
+            try { sessionStorage.setItem("autoself_web_ver", current); } catch (_) {}
+            return;
+          }
+          if (next !== current) {
+            current = next;
+            try { sessionStorage.setItem("autoself_web_ver", current); } catch (_) {}
+            // Brief notice then reload — no need to quit the desktop app.
+            console.info("[AutoSelf] web updated → reload");
+            location.reload();
+          }
+        } catch (_) {
+          /* offline / transient */
+        }
+      }
+      try { current = sessionStorage.getItem("autoself_web_ver") || ""; } catch (_) {}
+      setTimeout(tick, 3000);
+      setInterval(tick, 45000);
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") tick();
+      });
+    })();
+
     boot();
   </script>
 </body>

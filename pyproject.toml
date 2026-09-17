@@ -19,8 +19,9 @@ dependencies = [
 
 [project.scripts]
 sau = "sau_cli:main"
-autoself = "desktop_main:main"
-sau-desktop = "desktop_main:main"
+autoself = "desktop_cloud:main"
+sau-desktop = "desktop_cloud:main"
+sau-desktop-local = "desktop_main:main"
 
 [project.optional-dependencies]
 web = [
@@ -41,7 +42,7 @@ desktop = [
 package = true
 
 [tool.setuptools]
-py-modules = ["cli_main", "conf", "sau_cli", "desktop_main"]
+py-modules = ["cli_main", "conf", "sau_cli", "desktop_main", "desktop_cloud"]
 include-package-data = true
 
 [tool.setuptools.packages.find]

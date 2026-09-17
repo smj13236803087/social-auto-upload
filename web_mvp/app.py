@@ -61,6 +61,7 @@ DEFAULT_BILIBILI_UPLOAD_LINE = "bda2"
 AUTH_PUBLIC_PREFIXES = (
     "/static/",
     "/api/health",
+    "/api/client-version",
     "/api/auth/register",
     "/api/auth/login",
     "/api/auth/logout",
@@ -590,15 +591,43 @@ def _check_account(platform: str, account: str) -> bool:
     raise ValueError(f"不支持的平台: {platform}")
 
 
+def _web_client_version() -> str:
+    """Fingerprint of the main web UI so open clients can soft-reload after deploy."""
+    index = STATIC_DIR / "index.html"
+    try:
+        st = index.stat()
+        return f"{int(st.st_mtime)}-{st.st_size}"
+    except OSError:
+        return "0"
+
+
 @app.get("/")
 def index():
-    return send_from_directory(STATIC_DIR, "index.html")
+    resp = send_from_directory(STATIC_DIR, "index.html")
+    # Always revalidate so desktop shell / long-lived tabs get new HTML after deploy.
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 
 @app.get("/admin")
 @app.get("/admin/")
 def admin_index():
-    return send_from_directory(STATIC_DIR, "admin.html")
+    resp = send_from_directory(STATIC_DIR, "admin.html")
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
+
+
+@app.get("/api/client-version")
+def client_version():
+    return jsonify(
+        {
+            "ok": True,
+            "web": _web_client_version(),
+            # Native desktop shell version is independent; bump when shipping new .dmg/.pkg
+            "desktop_min": os.environ.get("AUTOSELF_DESKTOP_MIN_VERSION", "1.0.0"),
+        }
+    )
 
 
 @app.get("/api/bilibili-partitions")
@@ -689,7 +718,13 @@ def pick_folder():
 
 @app.get("/api/health")
 def health():
-    return jsonify({"ok": True, "platforms": list(PLATFORMS)})
+    return jsonify(
+        {
+            "ok": True,
+            "platforms": list(PLATFORMS),
+            "web": _web_client_version(),
+        }
+    )
 
 
 @app.get("/api/accounts")

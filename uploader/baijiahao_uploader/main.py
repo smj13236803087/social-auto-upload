@@ -307,8 +307,8 @@ class BaiJiaHaoVideo(BaseVideoUploader):
             # 5) 上传横版封面（必填）
             await self._upload_thumbnail(page)
 
-            # 6) 勾选「含AI生成内容」
-            await self._check_ai_declaration(page)
+            # 6) 创作声明：默认不勾选「含AI生成内容」
+            # await self._check_ai_declaration(page)
 
             # 7) 选择合集（如有配置）
             await self._apply_collection(page)
