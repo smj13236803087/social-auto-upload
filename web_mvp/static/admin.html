@@ -203,6 +203,17 @@
       background: #fff; color: #334155; border-color: #d9d9d9;
     }
     .ant-btn-default:hover { color: #1677ff; border-color: #1677ff; }
+    .pill {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: 12px; font-weight: 600; line-height: 1.6;
+    }
+    .pill.ok { background: #f6ffed; color: #389e0d; }
+    .pill.warn { background: #fff7e6; color: #d46b08; }
+    .pill.bad { background: #fff1f0; color: #cf1322; }
+    .pill.muted { background: #f5f5f5; color: #64748b; }
+    .pill.info { background: #e6f4ff; color: #1677ff; }
+    .subpanel { margin-top: 22px; }
+    .subpanel h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
     .ant-btn-dangerous {
       background: #fff; color: #ff4d4f; border-color: #ff4d4f;
     }
@@ -257,7 +268,33 @@
       padding: 12px 20px; border-top: 1px solid #f0f0f0;
       display: flex; justify-content: flex-end; gap: 8px;
     }
-    .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .menu-item { cursor: pointer; }
+    .menu-item:hover { color: #fff; background: rgba(255,255,255,.08); }
+    .menu-item.active:hover { background: var(--primary); }
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .stat-card {
+      background: #f8fafc;
+      border: 1px solid #eef2f7;
+      border-radius: 10px;
+      padding: 14px 16px;
+    }
+    .stat-card .label { color: #64748b; font-size: 12px; margin-bottom: 6px; }
+    .stat-card .value { font-size: 24px; font-weight: 700; color: #0f172a; }
+    .stat-card .sub { margin-top: 4px; font-size: 12px; color: #94a3b8; }
+    .trend-table td, .trend-table th { text-align: center !important; }
+    .tag-ok { color: #389e0d; background: #f6ffed; border-color: #b7eb8f; }
+    .tag-bad { color: #cf1322; background: #fff1f0; border-color: #ffa39e; }
+    .tag-warn { color: #d48806; background: #fffbe6; border-color: #ffe58f; }
+    .tag-muted { color: #64748b; background: #f1f5f9; border-color: #e2e8f0; }
+    .panel-page { display: none; }
+    .panel-page.active { display: block; }
+    .cell-muted { color: #94a3b8; font-size: 12px; }
+    .targets-cell { max-width: 320px; font-size: 12px; line-height: 1.5; }
 
     @media (max-width: 800px) {
       .sider { display: none; }
@@ -299,12 +336,19 @@
         <span>AutoSelf 后台</span>
       </div>
       <nav class="sider-menu">
-        <div class="menu-item active">👤 用户列表</div>
+        <div class="menu-item active" data-page="overview">概览看板</div>
+        <div class="menu-item" data-page="agents">本机助手</div>
+        <div class="menu-item" data-page="tasks">上传进度</div>
+        <div class="menu-item" data-page="schedules">定时任务</div>
+        <div class="menu-item" data-page="sessions">登录会话</div>
+        <div class="menu-item" data-page="publish">发布记录</div>
+        <div class="menu-item" data-page="accounts">平台账号</div>
+        <div class="menu-item" data-page="users">用户列表</div>
       </nav>
     </aside>
     <div class="main">
       <header class="header">
-        <div class="header-title">AutoSelf 管理后台</div>
+        <div class="header-title" id="pageTitle">概览看板</div>
         <div class="header-user">
           <span id="adminChip">管理员</span>
           <div class="avatar" id="adminAvatar">A</div>
@@ -312,7 +356,228 @@
         </div>
       </header>
       <main class="content">
-        <section class="panel">
+        <!-- Overview -->
+        <section class="panel panel-page active" id="page-overview">
+          <div class="panel-head">
+            <h2>今日健康度</h2>
+            <div class="toolbar">
+              <button type="button" class="ant-btn ant-btn-default" id="btnOverviewReload">刷新</button>
+            </div>
+          </div>
+          <div class="stat-grid" id="overviewStats">
+            <div class="stat-card"><div class="label">加载中…</div><div class="value">-</div></div>
+          </div>
+          <h2 style="font-size:15px;margin:8px 0 12px">近 7 日趋势</h2>
+          <table class="data trend-table">
+            <thead>
+              <tr><th>日期</th><th>新注册</th><th>发布成功</th><th>发布失败/部分失败</th></tr>
+            </thead>
+            <tbody id="trendBody">
+              <tr><td colspan="4" style="color:#94a3b8">加载中…</td></tr>
+            </tbody>
+          </table>
+          <div class="msg" id="overviewLog"></div>
+        </section>
+
+        <!-- Publish events -->
+        <section class="panel panel-page" id="page-publish">
+          <div class="panel-head">
+            <h2>发布记录</h2>
+            <div class="toolbar">
+              <input id="pubQ" placeholder="搜索用户 / 标题 / 链接" />
+              <select id="pubStatus">
+                <option value="">全部状态</option>
+                <option value="success">成功</option>
+                <option value="partial">部分成功</option>
+                <option value="failed">失败</option>
+                <option value="skipped">跳过</option>
+              </select>
+              <button type="button" class="ant-btn ant-btn-default" id="btnPubSearch">查询</button>
+              <button type="button" class="ant-btn ant-btn-default" id="btnPubReload">刷新</button>
+            </div>
+          </div>
+          <table class="data">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>用户</th>
+                <th>来源</th>
+                <th>标题</th>
+                <th>发到</th>
+                <th>状态</th>
+                <th>失败原因</th>
+              </tr>
+            </thead>
+            <tbody id="pubBody">
+              <tr><td colspan="7" style="color:#94a3b8">加载中…</td></tr>
+            </tbody>
+          </table>
+          <div class="pager">
+            <div id="pubPagerInfo">-</div>
+            <div class="actions">
+              <button type="button" class="ant-btn ant-btn-default" id="btnPubPrev">上一页</button>
+              <button type="button" class="ant-btn ant-btn-default" id="btnPubNext">下一页</button>
+            </div>
+          </div>
+          <div class="msg" id="pubLog"></div>
+        </section>
+
+        <!-- Platform accounts -->
+        <section class="panel panel-page" id="page-accounts">
+          <div class="panel-head">
+            <h2>平台账号总览</h2>
+            <div class="toolbar">
+              <input id="accQ" placeholder="搜索用户 / 昵称 / 账号" />
+              <select id="accPlatform">
+                <option value="">全部平台</option>
+                <option value="douyin">抖音</option>
+                <option value="kuaishou">快手</option>
+                <option value="bilibili">B站</option>
+                <option value="tencent">微信视频号</option>
+              </select>
+              <button type="button" class="ant-btn ant-btn-default" id="btnAccSearch">查询</button>
+              <button type="button" class="ant-btn ant-btn-default" id="btnAccReload">刷新</button>
+            </div>
+          </div>
+          <table class="data">
+            <thead>
+              <tr>
+                <th>用户</th>
+                <th>平台</th>
+                <th>昵称</th>
+                <th>登录状态</th>
+                <th>最近检查</th>
+                <th>备注</th>
+              </tr>
+            </thead>
+            <tbody id="accBody">
+              <tr><td colspan="6" style="color:#94a3b8">加载中…</td></tr>
+            </tbody>
+          </table>
+          <div class="pager">
+            <div id="accPagerInfo">-</div>
+            <div class="actions">
+              <button type="button" class="ant-btn ant-btn-default" id="btnAccPrev">上一页</button>
+              <button type="button" class="ant-btn ant-btn-default" id="btnAccNext">下一页</button>
+            </div>
+          </div>
+          <div class="msg" id="accLog"></div>
+        </section>
+
+
+        <!-- Agents -->
+        <section class="panel panel-page" id="page-agents">
+          <div class="panel-head">
+            <h2>本机助手 / 任务</h2>
+            <div class="toolbar">
+              <select id="agentJobStatus">
+                <option value="">全部任务状态</option>
+                <option value="pending">pending</option>
+                <option value="running">running</option>
+                <option value="awaiting_scan">awaiting_scan</option>
+                <option value="done">done</option>
+                <option value="error">error</option>
+                <option value="cancelled">cancelled</option>
+              </select>
+              <select id="agentJobType">
+                <option value="">全部类型</option>
+                <option value="login">扫码登录</option>
+                <option value="publish">发布</option>
+              </select>
+              <button type="button" class="ant-btn ant-btn-default" id="btnAgentReload">刷新</button>
+            </div>
+          </div>
+          <div class="stat-grid" id="agentStats" style="margin-bottom:16px">
+            <div class="stat-card"><div class="label">在线助手</div><div class="value" id="agentOnlineVal">-</div></div>
+            <div class="stat-card"><div class="label">助手记录</div><div class="value" id="agentTotalVal">-</div></div>
+          </div>
+          <h3 style="font-size:14px;margin:0 0 10px">谁在线</h3>
+          <table class="data">
+            <thead>
+              <tr><th>用户</th><th>助手</th><th>状态</th><th>最近心跳</th></tr>
+            </thead>
+            <tbody id="agentBody"><tr><td colspan="4" style="color:#94a3b8">加载中…</td></tr></tbody>
+          </table>
+          <div class="subpanel">
+            <h3>最近抖音扫码 / 发布任务</h3>
+            <table class="data">
+              <thead>
+                <tr><th>时间</th><th>用户</th><th>类型</th><th>账号</th><th>状态</th><th>错误</th><th></th></tr>
+              </thead>
+              <tbody id="agentJobBody"><tr><td colspan="7" style="color:#94a3b8">加载中…</td></tr></tbody>
+            </table>
+          </div>
+          <div class="msg" id="agentLog"></div>
+        </section>
+
+        <!-- Upload tasks -->
+        <section class="panel panel-page" id="page-tasks">
+          <div class="panel-head">
+            <h2>上传任务进度</h2>
+            <div class="toolbar">
+              <select id="taskStatus">
+                <option value="">全部</option>
+                <option value="running">进行中</option>
+                <option value="done">完成</option>
+                <option value="error">失败</option>
+              </select>
+              <button type="button" class="ant-btn ant-btn-default" id="btnTaskReload">刷新</button>
+            </div>
+          </div>
+          <table class="data">
+            <thead>
+              <tr><th>任务 ID</th><th>状态</th><th>进度</th><th>当前步骤</th><th>耗时</th><th>更新时间</th></tr>
+            </thead>
+            <tbody id="taskBody"><tr><td colspan="6" style="color:#94a3b8">加载中…</td></tr></tbody>
+          </table>
+          <div class="msg" id="taskLog"></div>
+        </section>
+
+        <!-- Schedules -->
+        <section class="panel panel-page" id="page-schedules">
+          <div class="panel-head">
+            <h2>定时任务（订阅 / 文件夹队列）</h2>
+            <div class="toolbar">
+              <button type="button" class="ant-btn ant-btn-default" id="btnSchedReload">刷新</button>
+            </div>
+          </div>
+          <table class="data">
+            <thead>
+              <tr><th>类型</th><th>名称</th><th>启用</th><th>每日</th><th>下次执行</th><th>上次结果</th><th>错误</th></tr>
+            </thead>
+            <tbody id="schedBody"><tr><td colspan="7" style="color:#94a3b8">加载中…</td></tr></tbody>
+          </table>
+          <div class="msg" id="schedLog"></div>
+        </section>
+
+        <!-- Sessions -->
+        <section class="panel panel-page" id="page-sessions">
+          <div class="panel-head">
+            <h2>登录会话</h2>
+            <div class="toolbar">
+              <input id="sessQ" placeholder="搜索邮箱 / 昵称 / 用户ID" />
+              <button type="button" class="ant-btn ant-btn-default" id="btnSessSearch">查询</button>
+              <button type="button" class="ant-btn ant-btn-default" id="btnSessReload">刷新</button>
+            </div>
+          </div>
+          <table class="data">
+            <thead>
+              <tr><th>用户</th><th>角色</th><th>Token</th><th>创建</th><th>过期</th><th>状态</th><th>操作</th></tr>
+            </thead>
+            <tbody id="sessBody"><tr><td colspan="7" style="color:#94a3b8">加载中…</td></tr></tbody>
+          </table>
+          <div class="pager">
+            <div id="sessPagerInfo">-</div>
+            <div class="actions">
+              <button type="button" class="ant-btn ant-btn-default" id="btnSessPrev">上一页</button>
+              <button type="button" class="ant-btn ant-btn-default" id="btnSessNext">下一页</button>
+            </div>
+          </div>
+          <div class="msg" id="sessLog"></div>
+        </section>
+
+        <!-- Users (existing) -->
+        <section class="panel panel-page" id="page-users">
           <div class="panel-head">
             <h2>用户列表</h2>
             <div class="toolbar">
@@ -397,10 +662,28 @@
   <script>
     const $ = (id) => document.getElementById(id);
     const TOKEN_KEY = "autoself_admin_token";
+    const PLATFORM_LABEL = { douyin: "抖音", kuaishou: "快手", bilibili: "B站", tencent: "微信视频号" };
+    const PAGE_TITLES = {
+      overview: "概览看板",
+      agents: "本机助手 / 任务",
+      tasks: "上传任务进度",
+      schedules: "定时任务",
+      sessions: "登录会话",
+      publish: "发布记录",
+      accounts: "平台账号总览",
+      users: "用户列表",
+    };
     let page = 1;
     const pageSize = 20;
     let total = 0;
     let currentAdmin = null;
+    let currentPage = "overview";
+    let pubPage = 1;
+    let pubTotal = 0;
+    let accPage = 1;
+    let accTotal = 0;
+    let sessPage = 1;
+    let sessTotal = 0;
 
     function getToken() { return localStorage.getItem(TOKEN_KEY) || ""; }
     function setToken(t) { localStorage.setItem(TOKEN_KEY, t || ""); }
@@ -423,6 +706,36 @@
       $("adminChip").textContent = name;
       $("adminAvatar").textContent = (name || "A").slice(0, 1).toUpperCase();
     }
+    function esc(s) {
+      return String(s || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function switchPage(name) {
+      currentPage = name;
+      document.querySelectorAll(".menu-item").forEach((el) => {
+        el.classList.toggle("active", el.dataset.page === name);
+      });
+      document.querySelectorAll(".panel-page").forEach((el) => {
+        el.classList.toggle("active", el.id === `page-${name}`);
+      });
+      $("pageTitle").textContent = PAGE_TITLES[name] || "AutoSelf 管理后台";
+      if (name === "overview") loadOverview().catch((e) => { $("overviewLog").textContent = e.message; $("overviewLog").className = "msg err"; });
+      if (name === "agents") loadAgents().catch((e) => { $("agentLog").textContent = e.message; $("agentLog").className = "msg err"; });
+      if (name === "tasks") loadUploadTasks().catch((e) => { $("taskLog").textContent = e.message; $("taskLog").className = "msg err"; });
+      if (name === "schedules") loadSchedules().catch((e) => { $("schedLog").textContent = e.message; $("schedLog").className = "msg err"; });
+      if (name === "sessions") loadSessions().catch((e) => { $("sessLog").textContent = e.message; $("sessLog").className = "msg err"; });
+      if (name === "publish") loadPublish().catch((e) => { $("pubLog").textContent = e.message; $("pubLog").className = "msg err"; });
+      if (name === "accounts") loadAccounts().catch((e) => { $("accLog").textContent = e.message; $("accLog").className = "msg err"; });
+      if (name === "users") loadUsers().catch((e) => { $("appLog").textContent = e.message; $("appLog").className = "msg err"; });
+    }
+
+    document.querySelectorAll(".menu-item[data-page]").forEach((el) => {
+      el.onclick = () => switchPage(el.dataset.page);
+    });
 
     async function api(path, options = {}) {
       const opts = { ...options };
@@ -438,6 +751,268 @@
       }
       if (!res.ok || data.ok === false) throw new Error(data.error || res.statusText);
       return data;
+    }
+
+
+    function pill(text, cls) {
+      return `<span class="pill ${cls || "muted"}">${esc(text)}</span>`;
+    }
+    function fmtDur(sec) {
+      const n = Math.max(0, Number(sec) || 0);
+      if (n < 60) return `${n}s`;
+      const m = Math.floor(n / 60);
+      const s = n % 60;
+      if (m < 60) return `${m}m ${s}s`;
+      const h = Math.floor(m / 60);
+      return `${h}h ${m % 60}m`;
+    }
+    function jobStatusPill(st) {
+      const s = String(st || "");
+      if (s === "done") return pill("done", "ok");
+      if (s === "error") return pill("error", "bad");
+      if (s === "cancelled") return pill("cancelled", "muted");
+      if (s === "awaiting_scan") return pill("awaiting_scan", "warn");
+      if (s === "running" || s === "pending") return pill(s, "info");
+      return pill(s || "-", "muted");
+    }
+
+    async function loadAgents() {
+      const status = ($("agentJobStatus").value || "").trim();
+      const type = ($("agentJobType").value || "").trim();
+      const qs = new URLSearchParams({ limit: "100" });
+      if (status) qs.set("status", status);
+      if (type) qs.set("type", type);
+      const data = await api(`/api/admin/agents?${qs}`);
+      $("agentOnlineVal").textContent = data.agents_online || 0;
+      $("agentTotalVal").textContent = data.agents_total || 0;
+      const agents = data.agents || [];
+      $("agentBody").innerHTML = agents.length ? agents.map((a) => `
+        <tr>
+          <td>${esc(a.user_email || a.user_name || ("#" + a.user_id))}<div style="color:#94a3b8;font-size:12px">uid ${a.user_id}</div></td>
+          <td>${esc(a.label || "本机助手")}<div style="color:#94a3b8;font-size:12px">${esc((a.agent_id || "").slice(0, 12))}</div></td>
+          <td>${a.online ? pill("在线", "ok") : pill("离线", "muted")}</td>
+          <td>${esc(a.last_seen || "-")}</td>
+        </tr>`).join("") : `<tr><td colspan="4" style="color:#94a3b8">暂无助手心跳</td></tr>`;
+      const jobs = data.jobs || [];
+      $("agentJobBody").innerHTML = jobs.length ? jobs.map((j) => `
+        <tr>
+          <td>${esc(j.created_at || j.updated_at || "")}</td>
+          <td>${esc(j.user_email || ("#" + j.user_id))}</td>
+          <td>${esc(j.type || "")} / ${esc(PLATFORM_LABEL[j.platform] || j.platform || "")}</td>
+          <td>${esc(j.account || "")}</td>
+          <td>${jobStatusPill(j.status)}</td>
+          <td style="max-width:220px;white-space:pre-wrap">${esc(j.error || "")}</td>
+          <td>${["pending","running","awaiting_scan"].includes(j.status)
+            ? `<button type="button" class="ant-btn ant-btn-dangerous" data-cancel-job="${esc(j.id)}">取消</button>`
+            : ""}</td>
+        </tr>`).join("") : `<tr><td colspan="7" style="color:#94a3b8">暂无任务</td></tr>`;
+      $("agentJobBody").querySelectorAll("[data-cancel-job]").forEach((btn) => {
+        btn.onclick = async () => {
+          if (!confirm("取消该助手任务？")) return;
+          await api(`/api/admin/agent-jobs/${btn.dataset.cancelJob}/cancel`, { method: "POST", body: "{}" });
+          await loadAgents();
+        };
+      });
+      $("agentLog").textContent = "";
+      $("agentLog").className = "msg";
+    }
+
+    async function loadUploadTasks() {
+      const status = ($("taskStatus").value || "").trim();
+      const qs = new URLSearchParams({ limit: "100" });
+      if (status) qs.set("status", status);
+      const data = await api(`/api/admin/upload-tasks?${qs}`);
+      const items = data.items || [];
+      $("taskBody").innerHTML = items.length ? items.map((t) => {
+        const st = t.status || "";
+        const stPill = st === "done" ? pill("done", "ok") : st === "error" ? pill("error", "bad") : pill(st || "running", "info");
+        return `<tr>
+          <td style="font-family:ui-monospace,monospace;font-size:12px">${esc((t.id || "").slice(0, 12))}…</td>
+          <td>${stPill}</td>
+          <td>${Number(t.pct || 0)}%</td>
+          <td>${esc(t.message || t.error || "")}</td>
+          <td>${fmtDur(t.duration_sec)}</td>
+          <td>${esc(t.updated_at || t.created_at || "")}</td>
+        </tr>`;
+      }).join("") : `<tr><td colspan="6" style="color:#94a3b8">暂无上传任务（data/tasks）</td></tr>`;
+      $("taskLog").textContent = items.length ? `共 ${data.total || items.length} 条 · 进行中 ${data.running || 0}` : "";
+      $("taskLog").className = "msg";
+    }
+
+    async function loadSchedules() {
+      const data = await api("/api/admin/schedules");
+      const items = data.items || [];
+      $("schedBody").innerHTML = items.length ? items.map((s) => {
+        const last = s.last_status
+          ? (String(s.last_status).includes("fail") || String(s.last_status).includes("error")
+              ? pill(s.last_status, "bad")
+              : pill(s.last_status, "ok"))
+          : pill("未跑过", "muted");
+        return `<tr>
+          <td>${esc(s.kind_label || s.kind)}</td>
+          <td>${esc(s.title || s.id)}</td>
+          <td>${s.enabled ? pill("启用", "ok") : pill("停用", "muted")}</td>
+          <td>${esc(s.daily_time || "-")}</td>
+          <td>${esc(s.next_run_at || "-")}</td>
+          <td>${last}<div style="color:#94a3b8;font-size:12px">${esc(s.last_run_at || "")}</div></td>
+          <td style="max-width:240px;white-space:pre-wrap">${esc(s.last_error || "")}</td>
+        </tr>`;
+      }).join("") : `<tr><td colspan="7" style="color:#94a3b8">暂无定时任务</td></tr>`;
+      $("schedLog").textContent = "";
+      $("schedLog").className = "msg";
+    }
+
+    async function loadSessions() {
+      const qs = new URLSearchParams({
+        page: String(sessPage),
+        page_size: String(pageSize),
+      });
+      const q = ($("sessQ").value || "").trim();
+      if (q) qs.set("q", q);
+      const data = await api(`/api/admin/sessions?${qs}`);
+      sessTotal = data.total || 0;
+      const items = data.items || [];
+      $("sessBody").innerHTML = items.length ? items.map((s) => `
+        <tr>
+          <td>${esc(s.email || s.username || ("#" + s.user_id))}<div style="color:#94a3b8;font-size:12px">uid ${s.user_id}</div></td>
+          <td>${esc(s.role || "")}</td>
+          <td style="font-family:ui-monospace,monospace;font-size:12px">${esc(s.token_masked || "")}</td>
+          <td>${esc(s.created_at || "")}</td>
+          <td>${esc(s.expires_at || "")}</td>
+          <td>${s.expired ? pill("已过期", "muted") : pill("有效", "ok")}</td>
+          <td>
+            <button type="button" class="ant-btn ant-btn-dangerous" data-kick="${s.id}">踢下线</button>
+            <button type="button" class="ant-btn ant-btn-default" data-kick-user="${s.user_id}">踢该用户全部</button>
+          </td>
+        </tr>`).join("") : `<tr><td colspan="7" style="color:#94a3b8">暂无会话</td></tr>`;
+      $("sessPagerInfo").textContent = `第 ${sessPage} 页 · 共 ${sessTotal} 条`;
+      $("sessBody").querySelectorAll("[data-kick]").forEach((btn) => {
+        btn.onclick = async () => {
+          if (!confirm("踢掉该会话？对方需重新登录。")) return;
+          await api(`/api/admin/sessions/${btn.dataset.kick}`, { method: "DELETE" });
+          await loadSessions();
+        };
+      });
+      $("sessBody").querySelectorAll("[data-kick-user]").forEach((btn) => {
+        btn.onclick = async () => {
+          if (!confirm("踢掉该用户全部登录会话？")) return;
+          await api(`/api/admin/users/${btn.dataset.kickUser}/sessions`, { method: "DELETE" });
+          await loadSessions();
+        };
+      });
+      $("sessLog").textContent = "";
+      $("sessLog").className = "msg";
+    }
+
+    async function loadOverview() {
+      const data = await api("/api/admin/overview");
+      const pt = data.publish_today || {};
+      $("overviewStats").innerHTML = `
+        <div class="stat-card"><div class="label">今日新注册</div><div class="value">${data.users_today || 0}</div><div class="sub">总用户 ${data.users_total || 0}</div></div>
+        <div class="stat-card"><div class="label">今日发布成功</div><div class="value">${pt.success || 0}</div><div class="sub">部分成功 ${pt.partial || 0}</div></div>
+        <div class="stat-card"><div class="label">今日发布失败</div><div class="value">${pt.failed || 0}</div><div class="sub">今日共 ${pt.total || 0} 次</div></div>
+        <div class="stat-card"><div class="label">本机助手在线</div><div class="value">${data.agents_online || 0}</div><div class="sub">平台账号 ${data.accounts_total || 0} · 失效 ${data.accounts_invalid || 0}</div></div>
+      `;
+      const trend = data.trend_7d || [];
+      if (!trend.length) {
+        $("trendBody").innerHTML = `<tr><td colspan="4" style="color:#94a3b8">暂无数据</td></tr>`;
+      } else {
+        $("trendBody").innerHTML = trend.map((d) => `
+          <tr>
+            <td>${esc(d.date)}</td>
+            <td>${d.registrations || 0}</td>
+            <td>${d.publish_success || 0}</td>
+            <td>${d.publish_failed || 0}</td>
+          </tr>
+        `).join("");
+      }
+      $("overviewLog").textContent = data.generated_at ? `更新于 ${data.generated_at}` : "";
+      $("overviewLog").className = "msg";
+    }
+
+    function statusTag(status) {
+      const map = {
+        success: ["成功", "tag-ok"],
+        partial: ["部分成功", "tag-warn"],
+        failed: ["失败", "tag-bad"],
+        skipped: ["跳过", "tag-muted"],
+      };
+      const [label, cls] = map[status] || [status || "-", "tag-muted"];
+      return `<span class="tag ${cls}">${esc(label)}</span>`;
+    }
+
+    function formatTargets(results) {
+      const list = results || [];
+      if (!list.length) return '<span class="cell-muted">-</span>';
+      return list.map((r) => {
+        const plat = PLATFORM_LABEL[r.platform] || r.platform || "?";
+        const mark = r.ok ? "✓" : "✗";
+        const err = r.ok ? "" : (r.error ? `（${r.error}）` : "");
+        return `${mark} ${plat}${err ? " " + err : ""}`;
+      }).join("<br>");
+    }
+
+    function failReason(ev) {
+      if (ev.status === "success") return "-";
+      const fails = (ev.results || []).filter((r) => !r.ok && r.error).map((r) => r.error);
+      if (fails.length) return fails[0];
+      return ev.detail || "-";
+    }
+
+    async function loadPublish() {
+      const q = encodeURIComponent(($("pubQ").value || "").trim());
+      const status = encodeURIComponent($("pubStatus").value || "");
+      const data = await api(`/api/admin/publish-events?q=${q}&status=${status}&page=${pubPage}&page_size=${pageSize}`);
+      pubTotal = data.total || 0;
+      const events = data.events || [];
+      $("pubPagerInfo").textContent = `共 ${pubTotal} 条 · 第 ${pubPage} 页`;
+      if (!events.length) {
+        $("pubBody").innerHTML = `<tr><td colspan="7" style="color:#94a3b8">暂无发布记录</td></tr>`;
+        return;
+      }
+      $("pubBody").innerHTML = events.map((ev) => {
+        const user = ev.user_email || ev.user_name
+          ? `${esc(ev.user_name || "")}${ev.user_email ? `<div class="cell-muted">${esc(ev.user_email)}</div>` : ""}`
+          : '<span class="cell-muted">未关联用户</span>';
+        return `<tr>
+          <td>${esc(ev.created_at || "-")}</td>
+          <td>${user}</td>
+          <td>${esc(ev.source_label || ev.source || "-")}</td>
+          <td>${esc(ev.title || "-")}</td>
+          <td class="targets-cell">${formatTargets(ev.results)}</td>
+          <td>${statusTag(ev.status)}</td>
+          <td class="targets-cell">${esc(failReason(ev))}</td>
+        </tr>`;
+      }).join("");
+      $("pubLog").textContent = "";
+    }
+
+    async function loadAccounts() {
+      const q = encodeURIComponent(($("accQ").value || "").trim());
+      const platform = encodeURIComponent($("accPlatform").value || "");
+      const data = await api(`/api/admin/platform-accounts?q=${q}&platform=${platform}&page=${accPage}&page_size=50`);
+      accTotal = data.total || 0;
+      const accounts = data.accounts || [];
+      $("accPagerInfo").textContent = `共 ${accTotal} 条 · 第 ${accPage} 页`;
+      if (!accounts.length) {
+        $("accBody").innerHTML = `<tr><td colspan="6" style="color:#94a3b8">暂无平台账号（用户刷新列表或检查登录后会写入）</td></tr>`;
+        return;
+      }
+      $("accBody").innerHTML = accounts.map((a) => {
+        const user = a.user_email || a.user_name
+          ? `${esc(a.user_name || "")}${a.user_email ? `<div class="cell-muted">${esc(a.user_email)}</div>` : ""}`
+          : '<span class="cell-muted">未关联用户</span>';
+        const cls = a.login_cls === "ok" ? "tag-ok" : (a.login_cls === "bad" ? "tag-bad" : "tag-muted");
+        return `<tr>
+          <td>${user}</td>
+          <td>${esc(a.platform_label || a.platform)}</td>
+          <td><strong>${esc(a.display_name || "-")}</strong><div class="cell-muted">${esc(a.account_key || "")}</div></td>
+          <td><span class="tag ${cls}">${esc(a.login_status || "未知")}</span></td>
+          <td>${esc(a.last_checked_at || "-")}</td>
+          <td class="targets-cell">${esc(a.last_error || "-")}</td>
+        </tr>`;
+      }).join("");
+      $("accLog").textContent = "";
     }
 
     async function loadUsers() {
@@ -552,7 +1127,7 @@
         currentAdmin = res.user;
         $("loginLog").textContent = "";
         showApp();
-        await loadUsers();
+        switchPage("overview");
       } catch (e) {
         $("loginLog").textContent = e.message;
       } finally {
@@ -587,6 +1162,30 @@
       loadUsers().catch((e) => { $("appLog").textContent = e.message; });
     };
 
+    $("btnOverviewReload").onclick = () => loadOverview().catch((e) => {
+
+    $("btnAgentReload").onclick = () => loadAgents().catch((e) => { $("agentLog").textContent = e.message; $("agentLog").className = "msg err"; });
+    $("agentJobStatus").onchange = () => loadAgents().catch(() => {});
+    $("agentJobType").onchange = () => loadAgents().catch(() => {});
+    $("btnTaskReload").onclick = () => loadUploadTasks().catch((e) => { $("taskLog").textContent = e.message; $("taskLog").className = "msg err"; });
+    $("taskStatus").onchange = () => loadUploadTasks().catch(() => {});
+    $("btnSchedReload").onclick = () => loadSchedules().catch((e) => { $("schedLog").textContent = e.message; $("schedLog").className = "msg err"; });
+    $("btnSessReload").onclick = () => loadSessions().catch((e) => { $("sessLog").textContent = e.message; $("sessLog").className = "msg err"; });
+    $("btnSessSearch").onclick = () => { sessPage = 1; loadSessions().catch((e) => { $("sessLog").textContent = e.message; $("sessLog").className = "msg err"; }); };
+    $("btnSessPrev").onclick = () => { if (sessPage <= 1) return; sessPage -= 1; loadSessions().catch((e) => { $("sessLog").textContent = e.message; }); };
+    $("btnSessNext").onclick = () => { if (sessPage * pageSize >= sessTotal) return; sessPage += 1; loadSessions().catch((e) => { $("sessLog").textContent = e.message; }); };
+      $("overviewLog").textContent = e.message;
+      $("overviewLog").className = "msg err";
+    });
+    $("btnPubSearch").onclick = () => { pubPage = 1; loadPublish().catch((e) => { $("pubLog").textContent = e.message; $("pubLog").className = "msg err"; }); };
+    $("btnPubReload").onclick = () => loadPublish().catch((e) => { $("pubLog").textContent = e.message; $("pubLog").className = "msg err"; });
+    $("btnPubPrev").onclick = () => { if (pubPage <= 1) return; pubPage -= 1; loadPublish().catch((e) => { $("pubLog").textContent = e.message; }); };
+    $("btnPubNext").onclick = () => { if (pubPage * pageSize >= pubTotal) return; pubPage += 1; loadPublish().catch((e) => { $("pubLog").textContent = e.message; }); };
+    $("btnAccSearch").onclick = () => { accPage = 1; loadAccounts().catch((e) => { $("accLog").textContent = e.message; $("accLog").className = "msg err"; }); };
+    $("btnAccReload").onclick = () => loadAccounts().catch((e) => { $("accLog").textContent = e.message; $("accLog").className = "msg err"; });
+    $("btnAccPrev").onclick = () => { if (accPage <= 1) return; accPage -= 1; loadAccounts().catch((e) => { $("accLog").textContent = e.message; }); };
+    $("btnAccNext").onclick = () => { if (accPage * 50 >= accTotal) return; accPage += 1; loadAccounts().catch((e) => { $("accLog").textContent = e.message; }); };
+
     async function boot() {
       if (!getToken()) {
         showLogin("");
@@ -596,7 +1195,7 @@
         const me = await api("/api/admin/me");
         currentAdmin = me.user;
         showApp();
-        await loadUsers();
+        switchPage("overview");
       } catch (e) {
         clearToken();
         showLogin(e.message || "请登录");

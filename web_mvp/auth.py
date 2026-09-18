@@ -237,6 +237,83 @@ def admin_login(email: str, password: str) -> dict:
     return login(email, password, require_role="admin")
 
 
+def request_password_reset_code(email: str) -> dict:
+    mail = validate_email(email)
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, status FROM users WHERE email=%s LIMIT 1",
+                (mail,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise AuthError("该邮箱未注册")
+            if row.get("status") != "active":
+                raise AuthError("账号已禁用，请联系管理员", status=403)
+            code = f"{random.randint(0, 999999):06d}"
+            expires_at = datetime.now() + timedelta(minutes=CODE_TTL_MINUTES)
+            cur.execute(
+                """
+                INSERT INTO password_resets (email, verification_code, expires_at)
+                VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                  verification_code=VALUES(verification_code),
+                  expires_at=VALUES(expires_at),
+                  updated_at=CURRENT_TIMESTAMP(3)
+                """,
+                (mail, code, expires_at),
+            )
+    try:
+        send_verification_code_email(to=mail, code=code, purpose="reset")
+    except Exception as exc:
+        raise AuthError(f"验证码发送失败：{exc}", status=502) from exc
+    return {"ok": True, "email": mail, "expires_in_seconds": CODE_TTL_MINUTES * 60}
+
+
+def reset_password(email: str, code: str, new_password: str) -> dict:
+    mail = validate_email(email)
+    raw_code = (code or "").strip()
+    if not re.fullmatch(r"\d{6}", raw_code):
+        raise AuthError("请输入 6 位数字验证码")
+    pwd = validate_password(new_password)
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT verification_code, expires_at
+                FROM password_resets WHERE email=%s LIMIT 1
+                """,
+                (mail,),
+            )
+            pending = cur.fetchone()
+            if not pending:
+                raise AuthError("请先获取验证码")
+            expires_at = pending["expires_at"]
+            if isinstance(expires_at, datetime) and expires_at < datetime.now():
+                cur.execute("DELETE FROM password_resets WHERE email=%s", (mail,))
+                raise AuthError("验证码已过期，请重新获取")
+            if str(pending["verification_code"]) != raw_code:
+                raise AuthError("验证码错误")
+            cur.execute(
+                "SELECT id, email, username, role, status, plan, created_at FROM users WHERE email=%s LIMIT 1",
+                (mail,),
+            )
+            row = cur.fetchone()
+            if not row:
+                cur.execute("DELETE FROM password_resets WHERE email=%s", (mail,))
+                raise AuthError("该邮箱未注册")
+            if row.get("status") != "active":
+                raise AuthError("账号已禁用，请联系管理员", status=403)
+            cur.execute(
+                "UPDATE users SET password_hash=%s WHERE id=%s",
+                (generate_password_hash(pwd), int(row["id"])),
+            )
+            cur.execute("DELETE FROM password_resets WHERE email=%s", (mail,))
+            # Invalidate old sessions
+            cur.execute("DELETE FROM sessions WHERE user_id=%s", (int(row["id"]),))
+        return _session_payload(conn, row)
+
+
 def logout(token: str | None) -> None:
     raw = (token or "").strip()
     if not raw:
@@ -244,6 +321,107 @@ def logout(token: str | None) -> None:
     with db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM sessions WHERE token=%s", (raw,))
+
+
+def list_sessions(
+    *,
+    q: str = "",
+    user_id: int | None = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict:
+    page = max(1, int(page or 1))
+    page_size = max(1, min(int(page_size or 50), 200))
+    offset = (page - 1) * page_size
+    q = (q or "").strip()
+    where = ["1=1"]
+    args: list = []
+    if user_id is not None:
+        where.append("s.user_id=%s")
+        args.append(int(user_id))
+    if q:
+        where.append("(u.email LIKE %s OR u.username LIKE %s OR CAST(s.user_id AS CHAR) LIKE %s)")
+        like = f"%{q}%"
+        args.extend([like, like, like])
+    sql_where = " AND ".join(where)
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT COUNT(*) AS c
+                FROM sessions s
+                JOIN users u ON u.id = s.user_id
+                WHERE {sql_where}
+                """,
+                args,
+            )
+            total = int((cur.fetchone() or {}).get("c") or 0)
+            cur.execute(
+                f"""
+                SELECT
+                  s.id, s.user_id, s.token, s.expires_at, s.created_at,
+                  u.email, u.username, u.role, u.status AS user_status
+                FROM sessions s
+                JOIN users u ON u.id = s.user_id
+                WHERE {sql_where}
+                ORDER BY s.created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                [*args, page_size, offset],
+            )
+            rows = cur.fetchall() or []
+    now = datetime.now()
+    items = []
+    for row in rows:
+        token = str(row.get("token") or "")
+        masked = f"{token[:4]}…{token[-4:]}" if len(token) >= 10 else "****"
+        expires = row.get("expires_at")
+        expired = isinstance(expires, datetime) and expires < now
+        items.append(
+            {
+                "id": int(row["id"]),
+                "user_id": int(row["user_id"]),
+                "email": row.get("email") or "",
+                "username": row.get("username") or "",
+                "role": row.get("role") or "user",
+                "user_status": row.get("user_status") or "",
+                "token_masked": masked,
+                "created_at": row["created_at"].isoformat(timespec="seconds")
+                if isinstance(row.get("created_at"), datetime)
+                else str(row.get("created_at") or ""),
+                "expires_at": expires.isoformat(timespec="seconds")
+                if isinstance(expires, datetime)
+                else str(expires or ""),
+                "expired": bool(expired),
+            }
+        )
+    return {
+        "ok": True,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": items,
+    }
+
+
+def revoke_session(session_id: int) -> bool:
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM sessions WHERE id=%s", (int(session_id),))
+            return cur.rowcount > 0
+
+
+def revoke_user_sessions(user_id: int, *, except_token: str | None = None) -> int:
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            if except_token:
+                cur.execute(
+                    "DELETE FROM sessions WHERE user_id=%s AND token<>%s",
+                    (int(user_id), except_token),
+                )
+            else:
+                cur.execute("DELETE FROM sessions WHERE user_id=%s", (int(user_id),))
+            return int(cur.rowcount or 0)
 
 
 def resolve_token(token: str | None) -> dict:

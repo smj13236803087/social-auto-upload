@@ -36,7 +36,28 @@ UPDATE autoself.users SET status='disabled' WHERE email='某人@qq.com';
 
 **日更订阅要求进程常开**（终端里的 `web_mvp` 或桌面窗口不要关）；到点由服务端后台线程触发。
 
-> 当前 `autoself` 是本机窗口壳，还不是安装包。下一步才是 PyInstaller 打成 `.app` / `.exe`。
+## 打包桌面安装包
+
+**Mac（在苹果电脑上）：**
+
+```bash
+cd /Applications/social-auto-upload
+uv sync --extra desktop
+./scripts/build_mac_desktop.sh
+# 产物：dist/AutoSelf-Mac.dmg / dist/AutoSelf-Mac.pkg
+```
+
+**Windows（必须在 Windows 上）：**
+
+```powershell
+cd C:\path\to\social-auto-upload
+uv sync --extra desktop
+powershell -ExecutionPolicy Bypass -File .\scripts\build_win_desktop.ps1
+# 产物：dist\AutoSelf-Desktop-Win.zip
+# 若已安装 Inno Setup 6，额外生成：dist\AutoSelf-Win-Setup.exe
+```
+
+> 图标：`assets/icons/AutoSelf.icns`（Mac）/ `assets/icons/AutoSelf.ico`（Windows）
 
 ## 功能
 

@@ -316,3 +316,81 @@ def cancel_pending_jobs(*, user_id: int, platform: str | None = None, job_type: 
         if cancelled:
             _save(JOBS_PATH, jobs)
     return cancelled
+
+
+def list_agents() -> list[dict]:
+    with _FileLock():
+        agents = _load(AGENTS_PATH)
+    if not isinstance(agents, dict):
+        return []
+    now_ts = _now_ts()
+    rows: list[dict] = []
+    for entry in agents.values():
+        if not isinstance(entry, dict):
+            continue
+        last = float(entry.get("last_seen_ts") or 0)
+        if not last and entry.get("last_seen"):
+            try:
+                last = datetime.fromisoformat(str(entry["last_seen"])).timestamp()
+            except ValueError:
+                last = 0
+        online = bool(last and (now_ts - last) <= AGENT_ONLINE_SECONDS)
+        rows.append(
+            {
+                "user_id": int(entry.get("user_id") or 0),
+                "agent_id": entry.get("agent_id") or "",
+                "label": entry.get("label") or "本机助手",
+                "last_seen": entry.get("last_seen") or "",
+                "last_seen_ts": last,
+                "online": online,
+                "offline_for_sec": int(max(0, now_ts - last)) if last else None,
+            }
+        )
+    rows.sort(key=lambda r: (not r["online"], -(r.get("last_seen_ts") or 0)))
+    return rows
+
+
+def list_jobs(
+    *,
+    status: str = "",
+    job_type: str = "",
+    user_id: int | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    with _FileLock():
+        jobs = _load(JOBS_PATH)
+    if not isinstance(jobs, list):
+        return []
+    status = (status or "").strip().lower()
+    job_type = (job_type or "").strip().lower()
+    out: list[dict] = []
+    for job in reversed(jobs):
+        if not isinstance(job, dict):
+            continue
+        if user_id is not None and int(job.get("user_id") or 0) != int(user_id):
+            continue
+        if status and str(job.get("status") or "").lower() != status:
+            continue
+        if job_type and str(job.get("type") or "").lower() != job_type:
+            continue
+        item = dict(job)
+        # Trim bulky fields for admin list
+        events = list(item.get("events") or [])
+        item["events_count"] = len(events)
+        item["last_event"] = events[-1] if events else None
+        item.pop("events", None)
+        item.pop("payload", None)
+        item.pop("qrcode", None)
+        out.append(item)
+        if len(out) >= max(1, min(int(limit or 100), 300)):
+            break
+    return out
+
+
+def cancel_job(job_id: str) -> dict | None:
+    job = get_job(job_id)
+    if not job:
+        return None
+    if job.get("status") in {"done", "error", "cancelled"}:
+        return job
+    return _update_job(job_id, status="cancelled", error="管理员取消")

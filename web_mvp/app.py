@@ -41,9 +41,13 @@ from uploader.tencent_uploader.main import (
     tencent_setup,
 )
 from web_mvp import agent_jobs as agent_store
+from web_mvp import admin_ops
+from web_mvp import admin_users as admin_user_store
 from web_mvp import folder_queue as folder_store
+from web_mvp import platform_accounts as account_store
 from web_mvp import publish_history as history_store
 from web_mvp import subscriptions as sub_store
+from web_mvp import task_progress as task_store
 # Douyin must run on user machine; cloud web dispatches jobs to local agent.
 AGENT_PLATFORMS = frozenset({"douyin"})
 from web_mvp.account_profile import resolve_account_profile
@@ -51,7 +55,6 @@ from web_mvp.auth import AuthError, extract_bearer, login as auth_login
 from web_mvp.auth import admin_login as auth_admin_login
 from web_mvp.auth import ensure_admin_user, logout as auth_logout
 from web_mvp.auth import resolve_token
-from web_mvp import admin_users as admin_user_store
 from web_mvp.bili_partitions import DEFAULT_BILIBILI_TID, list_bilibili_partitions
 
 PLATFORMS = ("douyin", "kuaishou", "bilibili", "tencent")
@@ -65,6 +68,7 @@ AUTH_PUBLIC_PREFIXES = (
     "/api/auth/register",
     "/api/auth/login",
     "/api/auth/logout",
+    "/api/auth/password",
     "/api/admin/login",
 )
 AUTH_PUBLIC_EXACT = {"/", "/favicon.ico", "/admin", "/admin/"}
@@ -166,6 +170,38 @@ def api_auth_login():
         return jsonify({"ok": False, "error": str(exc)}), exc.status
     except Exception as exc:
         return jsonify({"ok": False, "error": f"登录失败：{exc}"}), 500
+
+
+@app.post("/api/auth/password/request-code")
+def api_auth_password_request_code():
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        from web_mvp.auth import request_password_reset_code
+
+        return jsonify(request_password_reset_code(data.get("email") or ""))
+    except AuthError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), exc.status
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"发送验证码失败：{exc}"}), 500
+
+
+@app.post("/api/auth/password/reset")
+def api_auth_password_reset():
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        from web_mvp.auth import reset_password
+
+        return jsonify(
+            reset_password(
+                data.get("email") or "",
+                data.get("code") or "",
+                data.get("password") or data.get("new_password") or "",
+            )
+        )
+    except AuthError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), exc.status
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"重置密码失败：{exc}"}), 500
 
 
 @app.post("/api/auth/logout")
@@ -276,6 +312,143 @@ def api_admin_delete_user(user_id: int):
         return jsonify({"ok": True})
     except AuthError as exc:
         return jsonify({"ok": False, "error": str(exc)}), exc.status
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.get("/api/admin/overview")
+def api_admin_overview():
+    try:
+        return jsonify(admin_ops.overview())
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.get("/api/admin/publish-events")
+def api_admin_publish_events():
+    try:
+        user_id_raw = (request.args.get("user_id") or "").strip()
+        user_id = int(user_id_raw) if user_id_raw.isdigit() else None
+        data = history_store.admin_list_events(
+            q=request.args.get("q") or "",
+            status=request.args.get("status") or "",
+            user_id=user_id,
+            page=int(request.args.get("page") or 1),
+            page_size=int(request.args.get("page_size") or 20),
+        )
+        return jsonify(data)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.get("/api/admin/platform-accounts")
+def api_admin_platform_accounts():
+    try:
+        try:
+            account_store.sync_from_cookie_files(_list_accounts(refresh_profile=False), user_id=None)
+        except Exception:
+            pass
+        user_id_raw = (request.args.get("user_id") or "").strip()
+        user_id = int(user_id_raw) if user_id_raw.isdigit() else None
+        data = account_store.admin_list_accounts(
+            q=request.args.get("q") or "",
+            platform=request.args.get("platform") or "",
+            user_id=user_id,
+            page=int(request.args.get("page") or 1),
+            page_size=int(request.args.get("page_size") or 50),
+        )
+        return jsonify(data)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.get("/api/admin/agents")
+def api_admin_agents():
+    try:
+        return jsonify(
+            admin_ops.agents_dashboard(
+                job_status=request.args.get("status") or "",
+                job_type=request.args.get("type") or "",
+                limit=int(request.args.get("limit") or 80),
+            )
+        )
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.post("/api/admin/agent-jobs/<job_id>/cancel")
+def api_admin_agent_job_cancel(job_id: str):
+    try:
+        from web_mvp import agent_jobs as agent_store
+
+        job = agent_store.cancel_job(job_id)
+        if not job:
+            return jsonify({"ok": False, "error": "任务不存在"}), 404
+        return jsonify({"ok": True, "job": job})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.get("/api/admin/upload-tasks")
+def api_admin_upload_tasks():
+    try:
+        return jsonify(
+            admin_ops.upload_tasks(
+                status=request.args.get("status") or "",
+                limit=int(request.args.get("limit") or 100),
+            )
+        )
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.get("/api/admin/schedules")
+def api_admin_schedules():
+    try:
+        return jsonify(admin_ops.schedules())
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.get("/api/admin/sessions")
+def api_admin_sessions():
+    try:
+        from web_mvp.auth import list_sessions
+
+        user_id_raw = (request.args.get("user_id") or "").strip()
+        user_id = int(user_id_raw) if user_id_raw.isdigit() else None
+        return jsonify(
+            list_sessions(
+                q=request.args.get("q") or "",
+                user_id=user_id,
+                page=int(request.args.get("page") or 1),
+                page_size=int(request.args.get("page_size") or 50),
+            )
+        )
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.delete("/api/admin/sessions/<int:session_id>")
+def api_admin_session_revoke(session_id: int):
+    try:
+        from web_mvp.auth import revoke_session
+
+        ok = revoke_session(session_id)
+        if not ok:
+            return jsonify({"ok": False, "error": "会话不存在或已失效"}), 404
+        return jsonify({"ok": True})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.delete("/api/admin/users/<int:user_id>/sessions")
+def api_admin_user_sessions_revoke(user_id: int):
+    try:
+        from web_mvp.auth import revoke_user_sessions
+
+        n = revoke_user_sessions(user_id)
+        return jsonify({"ok": True, "revoked": n})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 
@@ -739,6 +912,11 @@ def list_accounts():
             except Exception as exc:
                 item["valid"] = False
                 item["error"] = str(exc)
+    uid = _try_current_user_id()
+    try:
+        account_store.sync_from_cookie_files(accounts, user_id=uid)
+    except Exception:
+        pass
     return jsonify({"accounts": accounts})
 
 
@@ -750,8 +928,28 @@ def check_account():
         return jsonify({"ok": False, "error": "platform / account 必填"}), 400
     try:
         valid = _check_account(platform, account)
+        try:
+            account_store.upsert_account(
+                platform=platform,
+                account_key=account,
+                user_id=_try_current_user_id(),
+                last_valid=bool(valid),
+                last_error="" if valid else "登录已失效",
+            )
+        except Exception:
+            pass
         return jsonify({"ok": True, "platform": platform, "account": account, "valid": valid})
     except Exception as exc:
+        try:
+            account_store.upsert_account(
+                platform=platform,
+                account_key=account,
+                user_id=_try_current_user_id(),
+                last_valid=False,
+                last_error=str(exc)[:300],
+            )
+        except Exception:
+            pass
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
@@ -1278,9 +1476,17 @@ def media_upload():
     return jsonify({"ok": True, "file_id": file_id, "filename": safe, "path": str(dest)})
 
 
+@app.get("/api/tasks/<task_id>")
+def get_task_progress(task_id: str):
+    data = task_store.get_task(task_id)
+    if not data:
+        return jsonify({"ok": False, "error": "任务不存在或已过期"}), 404
+    return jsonify({"ok": True, **data})
+
+
 @app.post("/api/media-and-publish")
 def media_and_publish():
-    """Upload a local video (multipart) then publish to one or more bound accounts."""
+    """Upload a local video (multipart), then publish in background with progress."""
     if "file" not in request.files:
         return jsonify({"ok": False, "error": "请选择本地视频文件"}), 400
     file = request.files["file"]
@@ -1311,6 +1517,8 @@ def media_and_publish():
         return jsonify({"ok": False, "error": "请至少选择一个上传目标账号"}), 400
     if not title:
         return jsonify({"ok": False, "error": "请填写标题"}), 400
+    if not description:
+        return jsonify({"ok": False, "error": "请填写文案"}), 400
 
     safe = secure_filename(file.filename) or "video.mp4"
     file_id = uuid.uuid4().hex
@@ -1318,53 +1526,86 @@ def media_and_publish():
     MEDIA_DIR.mkdir(parents=True, exist_ok=True)
     file.save(dest)
 
-    publish_description = description or title
+    publish_description = description
     schedule = parse_schedule(request.form.get("schedule"))
-    results: list[dict] = []
-    for target in targets:
-        platform = target["platform"]
-        account = target["account"]
-        try:
-            _publish_to_platform(
-                platform=platform,
-                account=account,
-                video_path=dest,
-                title=title,
-                description=publish_description,
-                tags=tags,
-                tid=int(target.get("tid") or default_tid),
-                schedule=schedule,
-            )
-            results.append({"ok": True, "platform": platform, "account": account})
-        except Exception as exc:
-            results.append(
-                {
-                    "ok": False,
-                    "platform": platform,
-                    "account": account,
-                    "error": str(exc),
-                }
-            )
+    task_id = task_store.create_task("文件已接收，准备发布…")
+    uid = _try_current_user_id()
 
-    any_ok = any(item.get("ok") for item in results)
-    history_store.append_event(
-        source="local",
-        title=title,
-        results=results,
-        detail="" if any_ok else "全部目标上传失败",
-        source_ref=safe,
-    )
+    def _work():
+        try:
+            results: list[dict] = []
+            n = max(1, len(targets))
+            for i, target in enumerate(targets):
+                platform = target["platform"]
+                account = target["account"]
+                label = PLATFORM_LABELS.get(platform, platform)
+                pct = 10 + int(80 * i / n)
+                task_store.update_task(task_id, pct, f"正在上传到 {label}/{account}…")
+                try:
+                    _publish_to_platform(
+                        platform=platform,
+                        account=account,
+                        video_path=dest,
+                        title=title,
+                        description=publish_description,
+                        tags=tags,
+                        tid=int(target.get("tid") or default_tid),
+                        schedule=schedule,
+                    )
+                    results.append({"ok": True, "platform": platform, "account": account})
+                except Exception as exc:
+                    results.append(
+                        {
+                            "ok": False,
+                            "platform": platform,
+                            "account": account,
+                            "error": _friendly_publish_error(exc),
+                        }
+                    )
+            any_ok = any(item.get("ok") for item in results)
+            history_store.append_event(
+                source="local",
+                title=title,
+                results=results,
+                detail="" if any_ok else "全部目标上传失败",
+                source_ref=safe,
+                user_id=uid,
+            )
+            payload = {
+                "ok": any_ok,
+                "file_id": file_id,
+                "filename": safe,
+                "path": str(dest),
+                "publish_title": title,
+                "publish_description": publish_description,
+                "tags": tags,
+                "results": results,
+                "error": None if any_ok else "全部目标上传失败",
+            }
+            task_store.update_task(task_id, 100, "发布完成" if any_ok else "发布失败")
+            task_store.complete_task(task_id, payload)
+        except Exception as exc:
+            history_store.append_event(
+                source="local",
+                title=title,
+                status="failed",
+                detail=str(exc)[-500:],
+                source_ref=safe,
+                user_id=uid,
+            )
+            task_store.fail_task(task_id, str(exc))
+
+    threading.Thread(target=_work, name=f"publish-{task_id[:8]}", daemon=True).start()
     return jsonify(
         {
-            "ok": any_ok,
+            "ok": True,
+            "job_id": task_id,
             "file_id": file_id,
             "filename": safe,
             "path": str(dest),
             "publish_title": title,
             "publish_description": publish_description,
             "tags": tags,
-            "results": results,
-            "error": None if any_ok else "全部目标上传失败",
         }
     )
 
@@ -1419,6 +1660,34 @@ async def _publish_kuaishou(account: str, video_path: Path, title: str, descript
     await app_upload.main()
 
 
+def _friendly_publish_error(exc: BaseException | str) -> str:
+    """Strip biliup ANSI noise; surface the useful Chinese/API message."""
+    raw = str(exc or "").strip()
+    if not raw:
+        return "上传失败"
+    text = re.sub(r"\x1b\[[0-9;]*m", "", raw)
+    for pat in (
+        r'message:\s*"([^"]+)"',
+        r"message:\s*'([^']+)'",
+        r"投稿过于频繁[^\"'\n]*",
+    ):
+        m = re.search(pat, text)
+        if m:
+            return (m.group(1) if m.lastindex else m.group(0)).strip()
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    useful = [
+        ln
+        for ln in lines
+        if "crates/" not in ln
+        and not ln.startswith(("├", "╰", "│"))
+        and "Unknown Error" not in ln
+    ]
+    if useful:
+        msg = useful[-1]
+        return (msg[:200] + "…") if len(msg) > 200 else msg
+    return text[:200]
+
+
 def _publish_bilibili(account: str, video_path: Path, title: str, description: str, tags: list[str], schedule, tid: int):
     account_file = resolve_account_file("bilibili", account)
     if not account_file.exists():
@@ -1446,7 +1715,9 @@ def _publish_bilibili(account: str, video_path: Path, title: str, description: s
         arguments.extend(["--dtime", str(int(schedule.timestamp()))])
     result = run_biliup_command(arguments)
     if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or "").strip() or "B站上传失败")
+        raise RuntimeError(
+            _friendly_publish_error((result.stderr or result.stdout or "").strip() or "B站上传失败")
+        )
 
 
 async def _publish_tencent(account: str, video_path: Path, title: str, description: str, tags: list[str], schedule):
@@ -1560,6 +1831,7 @@ def publish():
             title=title,
             results=[{"ok": True, "platform": platform, "account": account}],
             source_ref=str(video_path),
+            user_id=_try_current_user_id(),
         )
         return jsonify({"ok": True, "platform": platform, "account": account, "file": str(video_path)})
     except Exception as exc:
@@ -1569,6 +1841,7 @@ def publish():
             results=[{"ok": False, "platform": platform, "account": account, "error": str(exc)}],
             detail=str(exc),
             source_ref=str(data.get("path") or data.get("file_id") or ""),
+            user_id=_try_current_user_id(),
         )
         return jsonify({"ok": False, "error": str(exc)}), 500
 
@@ -1745,7 +2018,7 @@ def create_download():
 
 @app.post("/api/download-and-publish")
 def download_and_publish():
-    """Parse share URL → download once → upload to one or more platform accounts."""
+    """Parse share URL → download once → upload; returns job_id for progress polling."""
     data = request.get_json(force=True, silent=True) or {}
     raw_url = data.get("url") or ""
     title = (data.get("title") or "").strip()
@@ -1768,80 +2041,123 @@ def download_and_publish():
     if not targets:
         return jsonify({"ok": False, "error": "请至少选择一个上传目标账号"}), 400
 
-    try:
-        result = download_share_url(raw_url, output_dir=DOWNLOADS_DIR / uuid.uuid4().hex)
-        meta = {
-            "download_id": result.download_id,
-            "source_platform": result.platform,
-            "source_url": result.source_url,
-            "title": result.title,
-            "filename": result.filename,
-            "path": str(result.file_path),
-            "created_at": datetime.now().isoformat(timespec="seconds"),
-        }
-        _DOWNLOAD_INDEX[result.download_id] = meta
+    schedule = parse_schedule(data.get("schedule"))
+    task_id = task_store.create_task("解析链接中…")
+    uid = _try_current_user_id()
 
-        publish_title = title or result.title or Path(result.file_path).stem
-        publish_description = description or result.title or publish_title
-        schedule = parse_schedule(data.get("schedule"))
+    def _work():
+        stop_hb = threading.Event()
 
-        results: list[dict] = []
-        for target in targets:
-            platform = target["platform"]
-            account = target["account"]
-            try:
-                _publish_to_platform(
-                    platform=platform,
-                    account=account,
-                    video_path=result.file_path,
-                    title=publish_title,
-                    description=publish_description,
-                    tags=tags,
-                    tid=int(target.get("tid") or default_tid),
-                    schedule=schedule,
+        def _heartbeat(lo: int, hi: int, message: str):
+            pct = lo
+            while not stop_hb.wait(1.0):
+                if pct < hi:
+                    pct += 1
+                    task_store.update_task(task_id, pct, message)
+
+        try:
+            task_store.update_task(task_id, 5, "解析并下载视频中…")
+            hb = threading.Thread(
+                target=_heartbeat,
+                args=(5, 32, "解析并下载视频中…"),
+                daemon=True,
+            )
+            hb.start()
+            result = download_share_url(raw_url, output_dir=DOWNLOADS_DIR / uuid.uuid4().hex)
+            stop_hb.set()
+            meta = {
+                "download_id": result.download_id,
+                "source_platform": result.platform,
+                "source_url": result.source_url,
+                "title": result.title,
+                "filename": result.filename,
+                "path": str(result.file_path),
+                "created_at": datetime.now().isoformat(timespec="seconds"),
+            }
+            _DOWNLOAD_INDEX[result.download_id] = meta
+
+            publish_title = title or result.title or Path(result.file_path).stem
+            publish_description = description or result.title or publish_title
+            task_store.update_task(task_id, 35, f"已下载：{result.filename or '视频'}，准备上传…")
+
+            results: list[dict] = []
+            n = max(1, len(targets))
+            for i, target in enumerate(targets):
+                platform = target["platform"]
+                account = target["account"]
+                label = PLATFORM_LABELS.get(platform, platform)
+                base = 35 + int(55 * i / n)
+                top = 35 + int(55 * (i + 1) / n) - 1
+                stop_hb.clear()
+                hb = threading.Thread(
+                    target=_heartbeat,
+                    args=(base, max(base + 1, top), f"正在上传到 {label}/{account}…"),
+                    daemon=True,
                 )
-                results.append({"ok": True, "platform": platform, "account": account})
-            except Exception as exc:
-                results.append(
-                    {
-                        "ok": False,
-                        "platform": platform,
-                        "account": account,
-                        "error": str(exc),
-                    }
-                )
+                task_store.update_task(task_id, base, f"正在上传到 {label}/{account}…")
+                hb.start()
+                try:
+                    _publish_to_platform(
+                        platform=platform,
+                        account=account,
+                        video_path=result.file_path,
+                        title=publish_title,
+                        description=publish_description,
+                        tags=tags,
+                        tid=int(target.get("tid") or default_tid),
+                        schedule=schedule,
+                    )
+                    results.append({"ok": True, "platform": platform, "account": account})
+                except Exception as exc:
+                    results.append(
+                        {
+                            "ok": False,
+                            "platform": platform,
+                            "account": account,
+                            "error": _friendly_publish_error(exc),
+                        }
+                    )
+                finally:
+                    stop_hb.set()
 
-        any_ok = any(item.get("ok") for item in results)
-        history_store.append_event(
-            source="link",
-            title=publish_title,
-            results=results,
-            detail="" if any_ok else "全部目标上传失败",
-            source_ref=result.source_url or raw_url,
-        )
-        return jsonify(
-            {
+            any_ok = any(item.get("ok") for item in results)
+            history_store.append_event(
+                source="link",
+                title=publish_title,
+                results=results,
+                detail="" if any_ok else "全部目标上传失败",
+                source_ref=result.source_url or raw_url,
+                user_id=uid,
+            )
+            payload = {
                 "ok": any_ok,
                 **meta,
                 "publish_title": publish_title,
                 "publish_description": publish_description,
                 "download_url": f"/api/download/{result.download_id}",
                 "results": results,
-                # Keep old fields for single-target callers
                 "upload_platform": results[0]["platform"] if len(results) == 1 else "",
                 "upload_account": results[0]["account"] if len(results) == 1 else "",
                 "error": None if any_ok else "全部目标上传失败",
             }
-        ), (200 if any_ok else 500)
-    except Exception as exc:
-        history_store.append_event(
-            source="link",
-            title=(title or "").strip(),
-            status="failed",
-            detail=str(exc)[-500:],
-            source_ref=raw_url,
-        )
-        return jsonify({"ok": False, "error": str(exc)}), 500
+            task_store.update_task(
+                task_id, 100, "上传完成" if any_ok else "上传失败"
+            )
+            task_store.complete_task(task_id, payload)
+        except Exception as exc:
+            stop_hb.set()
+            history_store.append_event(
+                source="link",
+                title=(title or "").strip(),
+                status="failed",
+                detail=str(exc)[-500:],
+                source_ref=raw_url,
+                user_id=uid,
+            )
+            task_store.fail_task(task_id, str(exc))
+
+    threading.Thread(target=_work, name=f"dlpub-{task_id[:8]}", daemon=True).start()
+    return jsonify({"ok": True, "job_id": task_id})
 
 
 @app.get("/api/download/<download_id>")

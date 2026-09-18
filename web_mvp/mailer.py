@@ -45,7 +45,12 @@ def send_email(*, to: str, subject: str, text: str, html: str | None = None) -> 
 
 
 def send_verification_code_email(*, to: str, code: str, purpose: str = "register") -> None:
-    purpose_text = "注册" if purpose == "register" else "验证"
+    purpose_map = {
+        "register": "注册",
+        "reset": "重置密码",
+        "verify": "验证",
+    }
+    purpose_text = purpose_map.get(purpose, "验证")
     subject = f"你的{purpose_text}验证码：{code}"
     text = (
         f"你的{purpose_text}验证码是：{code}。"
