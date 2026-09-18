@@ -770,16 +770,17 @@
       <div id="dlLog" class="log"></div>
     </section>
 
-    <section class="card" id="sectionSubscriptions" style="display:none" hidden>
+    <section class="card" id="sectionSubscriptions">
       <h2>4. 博主日更订阅</h2>
       <p class="muted" style="margin:0 0 10px">
         填写博主主页链接与每天执行时间；添加时会校验链接能否拉取到作品。
+        支持抖音 / 快手 / B站。
         到点后自动拉取该博主最新视频，若有更新则下载并上传到指定平台。
         服务需保持运行。可用「立即执行」先测一次。<strong>最多 2 条订阅</strong>；每条可勾选多个上传账号。
       </p>
       <div class="row">
         <label>主页链接</label>
-        <input id="subHomepage" placeholder="必填：抖音/快手/B站博主主页 URL" />
+        <input id="subHomepage" placeholder="必填：抖音/快手/B站 博主主页 URL" />
       </div>
       <div class="row">
         <label>每天</label>
@@ -812,7 +813,7 @@
     </section>
 
     <section class="card">
-      <h2>4. 本地文件夹日更队列</h2>
+      <h2>5. 本地文件夹日更队列</h2>
       <p class="muted" style="margin:0 0 10px">
         指定本地视频文件夹与每天时间；到点按<strong>文件创建时间升序</strong>取未发过的视频上传（按文件名去重）。
         下面最多展示 5 个待发视频，可提前写好标题 / 文案 / 井号标签；留空则默认「奔赴下一场山海」。
@@ -849,7 +850,7 @@
     let authMode = "login";
     let currentUser = null;
     const TOKEN_KEY = "autoself_token";
-    const PLATFORM_LABEL = { douyin: "抖音", kuaishou: "快手", bilibili: "B站", tencent: "微信视频号" };
+    const PLATFORM_LABEL = { douyin: "抖音", kuaishou: "快手", bilibili: "B站", tencent: "微信视频号", youtube: "YouTube" };
     const PLATFORM_ORDER = ["douyin", "kuaishou", "bilibili", "tencent"];
     const PLATFORM_ICONS = {
       douyin: "/static/icons/platforms/douyin.png",

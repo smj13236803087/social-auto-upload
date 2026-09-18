@@ -12,7 +12,12 @@ from pathlib import Path
 from typing import Callable
 
 from conf import BASE_DIR
-from downloader.cn_share import detect_platform, download_share_url, extract_url, fetch_latest_video_from_profile
+from downloader.cn_share import (
+    detect_platform,
+    download_share_url,
+    extract_url,
+    fetch_latest_video_from_profile,
+)
 from web_mvp.bili_partitions import DEFAULT_BILIBILI_TID
 from web_mvp import publish_history as history_store
 from web_mvp.targets import targets_from_record, targets_summary
@@ -66,6 +71,8 @@ def add_subscription(
 ) -> dict:
     url = extract_url(homepage_url)
     source_platform = detect_platform(url)
+    if source_platform == "youtube":
+        raise ValueError("线上订阅不支持 YouTube，请用本机定时任务 scripts/sync_yt_food.py")
     normalized = targets_from_record({"targets": targets, "tid": tid})
     if not normalized:
         raise ValueError("请至少选择一个上传目标账号")

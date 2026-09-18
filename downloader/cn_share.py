@@ -1,8 +1,9 @@
-"""Download Douyin / Kuaishou / Bilibili videos from share URLs via yt-dlp."""
+"""Download Douyin / Kuaishou / Bilibili / YouTube videos from share/profile URLs via yt-dlp."""
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -13,11 +14,12 @@ from urllib.parse import parse_qs, urlparse
 
 from conf import BASE_DIR
 
-SUPPORTED_PLATFORMS = ("douyin", "kuaishou", "bilibili")
+SUPPORTED_PLATFORMS = ("douyin", "kuaishou", "bilibili", "youtube")
 
 _URL_RE = re.compile(r"https?://[^\s<>\"']+")
 _DOUYIN_SEC_UID_RE = re.compile(r"(?:/user/|/share/user/)(MS4wLjABAAAA[\w-]+)")
 _DOUYIN_VIDEO_ID_RE = re.compile(r"/video/(\d+)")
+_YT_EXTRACTOR_ARGS = "youtube:player_client=default,web_embedded"
 
 
 @dataclass(slots=True)
@@ -33,6 +35,30 @@ class DownloadResult:
 def _yt_dlp_cmd() -> list[str]:
     # Prefer the active interpreter's yt-dlp module (works under `uv run`).
     return [sys.executable, "-m", "yt_dlp"]
+
+
+def _youtube_extra_args() -> list[str]:
+    """Proxy + extractor args for YouTube (needed when youtube.com is blocked)."""
+    args = [
+        "--extractor-args",
+        _YT_EXTRACTOR_ARGS,
+        "--socket-timeout",
+        "15",
+        "--retries",
+        "2",
+    ]
+    proxy = ""
+    try:
+        from conf import YT_PROXY
+
+        proxy = str(YT_PROXY or "").strip()
+    except Exception:
+        proxy = ""
+    if not proxy:
+        proxy = (os.environ.get("AUTOSELF_YT_PROXY") or os.environ.get("YT_PROXY") or "").strip()
+    if proxy:
+        args.extend(["--proxy", proxy])
+    return args
 
 
 def extract_url(raw: str) -> str:
@@ -53,7 +79,29 @@ def detect_platform(url: str) -> str:
         return "kuaishou"
     if "bilibili.com" in host or "b23.tv" in host:
         return "bilibili"
-    raise ValueError("仅支持抖音 / 快手 / B站视频或主页链接")
+    if "youtube.com" in host or "youtu.be" in host or "youtube-nocookie.com" in host:
+        return "youtube"
+    raise ValueError("仅支持抖音 / 快手 / B站 / YouTube 视频或主页链接")
+
+
+def _normalize_youtube_list_url(url: str) -> str:
+    """Prefer channel Shorts tab for @handle / channel home URLs."""
+    parsed = urlparse(url)
+    path = (parsed.path or "").rstrip("/")
+    lower = path.lower()
+    if any(
+        part in lower
+        for part in ("/shorts", "/videos", "/streams", "/playlist", "/watch", "/live")
+    ):
+        return url
+    if (
+        path.startswith("/@")
+        or "/channel/" in lower
+        or path.startswith("/c/")
+        or path.startswith("/user/")
+    ):
+        return f"{parsed.scheme}://{parsed.netloc}{path}/shorts"
+    return url
 
 
 @dataclass(slots=True)
@@ -280,15 +328,20 @@ def fetch_latest_video_from_profile(raw_url: str) -> LatestVideoEntry:
         mid = _extract_bilibili_mid(url)
         if mid:
             profile_url = f"https://space.bilibili.com/{mid}/video"
+    elif platform == "youtube":
+        profile_url = _normalize_youtube_list_url(url)
 
+    playlist_end = "30" if platform == "youtube" else "12"
+    list_timeout = 55 if platform == "youtube" else 180
     cmd = [
         *_yt_dlp_cmd(),
         "--flat-playlist",
         "--playlist-end",
-        "12",
+        playlist_end,
         "--print",
         "%(id)s\t%(webpage_url)s\t%(title)s\t%(timestamp)s\t%(upload_date)s",
         *_prepare_cookies_arg(platform, work_dir),
+        *(_youtube_extra_args() if platform == "youtube" else []),
         profile_url,
     ]
     try:
@@ -296,10 +349,16 @@ def fetch_latest_video_from_profile(raw_url: str) -> LatestVideoEntry:
             cmd,
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=list_timeout,
             cwd=str(BASE_DIR),
         )
     except subprocess.TimeoutExpired as exc:
+        if platform == "youtube":
+            raise RuntimeError(
+                "拉取 YouTube 作品超时：服务器直连 YouTube 不通。"
+                "请在服务器配置可用代理后设置 conf.YT_PROXY 或环境变量 AUTOSELF_YT_PROXY"
+                "（例如 http://127.0.0.1:7890），再重启服务"
+            ) from exc
         raise RuntimeError("拉取博主作品列表超时") from exc
 
     if proc.returncode != 0:
@@ -309,8 +368,24 @@ def fetch_latest_video_from_profile(raw_url: str) -> LatestVideoEntry:
             hint = "；请确认主页链接有效，并已绑定抖音账号 Cookie"
         elif platform == "bilibili":
             hint = "；B站主页接口可能风控，请稍后重试或换链接"
-        raise RuntimeError((err[-1500:] if err else "拉取博主作品失败") + hint)
+        elif platform == "youtube":
+            proxy_on = bool(
+                (os.environ.get("AUTOSELF_YT_PROXY") or os.environ.get("YT_PROXY") or "").strip()
+            )
+            try:
+                from conf import YT_PROXY
 
+                proxy_on = proxy_on or bool(str(YT_PROXY or "").strip())
+            except Exception:
+                pass
+            if not proxy_on:
+                hint = (
+                    "；当前未配置 YouTube 代理。服务器直连 YouTube 不可用，"
+                    "请设置 conf.YT_PROXY 或 AUTOSELF_YT_PROXY 后重启"
+                )
+            else:
+                hint = "；已配置代理但仍失败，请检查代理是否可用、协议是否为 http/socks5"
+        raise RuntimeError((err[-1500:] if err else "拉取博主作品失败") + hint)
     entries: list[tuple[int, LatestVideoEntry]] = []
     for line in (proc.stdout or "").splitlines():
         line = line.strip()
@@ -324,8 +399,13 @@ def fetch_latest_video_from_profile(raw_url: str) -> LatestVideoEntry:
         title = parts[2].strip() if len(parts) > 2 else video_id
         ts_raw = parts[3].strip() if len(parts) > 3 else ""
         date_raw = parts[4].strip() if len(parts) > 4 else ""
-        if not video_id or not video_url.startswith("http"):
+        if not video_id or video_id in {"NA", "None"}:
             continue
+        if not video_url.startswith("http"):
+            if platform == "youtube" and video_id:
+                video_url = f"https://www.youtube.com/shorts/{video_id}"
+            else:
+                continue
         sort_key = 0
         if ts_raw.isdigit():
             sort_key = int(ts_raw)
@@ -760,6 +840,7 @@ def download_share_url(raw_url: str, output_dir: Path | None = None) -> Download
         "--print",
         "after_move:title",
         *_prepare_cookies_arg(platform, target_dir),
+        *(_youtube_extra_args() if platform == "youtube" else []),
         url,
     ]
 

@@ -43,7 +43,7 @@ DEFAULT_COOKIES_FROM_BROWSER = "edge"
 DEFAULT_KS_TAGS = "沉浸式"
 DEFAULT_DY_TAGS = "美食,制作过程,治愈"
 DEFAULT_XHS_TAGS = "美食,制作过程,治愈,跟做"
-DEFAULT_BILI_TID = 249
+DEFAULT_BILI_TID = 76  # 美食制作
 DEFAULT_BILI_TAGS = "美食,制作过程,治愈"
 # Auto-upload targets for this job.
 FOOD_PLATFORMS = ("kuaishou", "bilibili")
